@@ -71,6 +71,51 @@ def building(x, y, w, d, h, rng, spacing=0.25):
     return roof
 
 
+JUNCTION_TOWERS = {"A": (20.0, 60.0), "B": (150.0, 60.0), "C": (280.0, 130.0), "D": (170.0, 190.0), "E": (300.0, 145.0)}
+JUNCTION_SPANS = [("A", "B"), ("B", "C"), ("B", "D"), ("C", "E")]
+
+
+def make_junction_scene(seed: int = 0):
+    """A line with an angle tower (B), a branch line leaving B (junction) and two towers
+    25 m apart (C, E). Returns (points, labels, info)."""
+    rng = np.random.default_rng(seed)
+    parts, labels = [], []
+
+    def add(pts, label):
+        parts.append(pts)
+        labels.append(np.full(len(pts), label, dtype=np.uint8))
+
+    n = int(320 * 220 * 12)
+    gx, gy = rng.uniform(0, 320, n), rng.uniform(0, 220, n)
+    add(np.column_stack([gx, gy, ground_z(gx, gy) + rng.normal(0, 0.03, n)]), GROUND)
+    for x, y in JUNCTION_TOWERS.values():
+        add(pylon(x, y, rng), PYLON)
+    attach = [(-6.0, 26.0), (0.0, 26.6), (6.0, 26.0), (0.0, 30.0)]
+    for p, q in JUNCTION_SPANS:
+        a, b = np.array(JUNCTION_TOWERS[p]), np.array(JUNCTION_TOWERS[q])
+        d = (b - a) / np.linalg.norm(b - a)
+        nrm = np.array([-d[1], d[0]])
+        for off, h in attach:
+            pa, pb = a + off * nrm, b + off * nrm
+            add(catenary((*pa, ground_z(*a) + h), (*pb, ground_z(*b) + h), c=900.0, spacing=0.15, rng=rng), WIRE)
+    for _ in range(60):
+        tx, ty = rng.uniform(5, 315), rng.uniform(5, 215)
+        P = np.array([tx, ty])
+        near = min(
+            np.linalg.norm(P - (np.array(JUNCTION_TOWERS[p]) + np.clip(
+                (P - JUNCTION_TOWERS[p]) @ (np.subtract(JUNCTION_TOWERS[q], JUNCTION_TOWERS[p])) / np.sum(np.subtract(JUNCTION_TOWERS[q], JUNCTION_TOWERS[p]) ** 2), 0, 1
+            ) * np.subtract(JUNCTION_TOWERS[q], JUNCTION_TOWERS[p])))
+            for p, q in JUNCTION_SPANS
+        )
+        if near > 14:
+            add(tree(tx, ty, rng.uniform(5, 16), rng), VEGETATION)
+    pts = np.vstack(parts).astype(np.float32)
+    lab = np.concatenate(labels)
+    shift = pts.min(axis=0)
+    towers = {k: (v[0] - shift[0], v[1] - shift[1]) for k, v in JUNCTION_TOWERS.items()}
+    return pts - shift, lab, {"towers": towers, "spans": JUNCTION_SPANS}
+
+
 def make_scene(seed: int = 0, length: float = 300.0, width: float = 80.0):
     """Return (points float32 (n, 3), labels uint8 (n,), info dict)."""
     rng = np.random.default_rng(seed)

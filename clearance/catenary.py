@@ -195,7 +195,9 @@ def _near_towers(points, span: Span, margin: float) -> np.ndarray:
 def validate(c: Conductor, min_points: int, min_coverage: float, min_extent: float, max_rmse: float) -> str | None:
     if not np.all(np.isfinite([c.z0, c.u0, c.c, c.rmse_z])):
         return "fit did not converge"
-    if len(c.idx) < min_points:
+    # Short spans (15-30 m at junctions) carry fewer points: 3 per metre, capped.
+    need = min(min_points, int(3 * (c.u_max - c.u_min)))
+    if len(c.idx) < need:
         return f"only {len(c.idx)} points"
     if c.u_max - c.u_min < min_extent:
         return f"only {c.u_max - c.u_min:.0f} m long"

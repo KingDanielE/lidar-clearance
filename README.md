@@ -4,15 +4,15 @@ How close is the vegetation to a power line, and will it still be clear on a hot
 a strong wind? This pipeline answers that from a raw LiDAR point cloud, in three phases:
 
 - **Phase 1**: classify the cloud into ground, vegetation, wires, pylons and buildings.
-- **Phase 2**: find the towers, split the line into spans and fit a catenary to every
-  conductor.
+- **Phase 2**: find the towers, build a graph of towers and the spans between them (several
+  lines and junctions per tile), and fit a catenary to every conductor.
 - **Phase 3**: vegetation clearance as surveyed, at max sag and in wind blowout; tiered
   encroachment zones; hazard (fall-in) trees.
 
 Plain Python (NumPy, SciPy, laspy), rule-based and physics-based, no trained model. Checked
 against hand-labelled drone LiDAR of high-voltage lines ([GridNet-HD](#data-and-credit)):
-two alpine tiles, a forest tile with trees growing into the line, and a held-out tile on
-another line that includes a junction (where it does not work well yet).
+two alpine tiles, a forest tile with trees growing into the line, and a tile on another
+line with a junction (several towers 15-30 m apart where lines meet).
 
 ## Results at a glance
 
@@ -20,28 +20,28 @@ Every number is scored against the dataset's hand labels. Phase 3 is scored **en
 the reference is a run built entirely from the hand labels (conductor model fitted to the
 hand-labelled wire, hand-labelled vegetation), compared point by point with our run.
 
-| | t5b6: alpine, held out | t1z6a: forest | t2z5: other line, held out |
+| | t5b6: alpine, held out | t1z6a: forest | t2z5: junction |
 |---|---|---|---|
 | Points | 36 M | 50 M | 67 M |
 | 1. Wires found (recall / IoU) | 97% / 0.79 | 99% / 0.69 | 99% / 0.81 |
-| 2. Towers / conductors (hand labels) | 2 / 21 (2 / 21) | 3 / 20 (3 / 20) | **3 / 26 (6 / 38)** |
-| 2. Fit RMSE / distance to the hand-label fit | 3-5.5 cm / max 3.8 cm | 3-4 cm / max 0.6 cm | 3-8 cm / max 9.5 cm |
-| 3. Closest vegetation as surveyed (hand labels) | 9.9 m (8.4 m) | 1.2 m (1.2 m) | **0.02 m (1.2 m)** |
-| 3. Encroachment zones (precision / recall) | none exist | **100% / 100%** (45 zones) | 77% / 82% (49 zones) |
-| 3. Flagged vegetation points (precision / recall) | - | 98% / 99% | 62% / 76% |
-| 3. Hazard trees (precision / recall) | none exist | 95% / 100% (60 trees) | 73% / 93% (82 trees) |
+| 2. Towers found (true towers) | 2 (2), within 0.1 m | 3 (3), within 0.7 m | **6 (6), within 2.6 m** |
+| 2. Conductors (hand-label model) | 22 (22) | 21 (21) | 39 (35) |
+| 2. Fit RMSE / median distance to the hand-label fit | 3-6 cm / 0.5 cm | 3-4 cm / 0.0 cm | 2-20 cm / 0.3 cm |
+| 3. Closest vegetation as surveyed (hand labels) | 8.4 m (8.4 m) | 0.7 m (1.2 m) | 1.2 m (1.2 m) |
+| 3. Encroachment zones (precision / recall) | none exist | **98% / 100%** (46 zones) | 85% / 96% (49 zones) |
+| 3. Flagged vegetation points (precision / recall) | - | 92% / 100% | 86% / 91% |
+| 3. Hazard trees (precision / recall) | none exist | 94% / 100% (60 trees) | 76% / 96% (84 trees) |
 
 - **t5b6** was not used for tuning.
 - **t1z6a** exposed the forest problems (towers fused with the canopy, conductors bridged by
   stray points, tower steel labelled as vegetation) and was fixed on, so it is not held out.
-- **t2z5** was run with no changes first. It has a **junction**: four towers within 60 m
-  (spans of 15-29 m) where a second line leaves. We find one of the four, so spans and
-  conductors there are wrong; a conductor model through the junction gives a false 0.02 m
-  violation, and 9 of 49 real zones are missed. Away from the junction the conductor models
-  match the hand-label ones. Supporting junctions and several lines per tile (a tower and
-  line graph instead of one route) is the main open item. One fix was made after the first
-  t2z5 run (a conductor is only modelled where its data reaches, below), so it is no longer
-  strictly held out either.
+- **t2z5** was run unchanged first and failed at its junction (the first version modelled
+  one line per tile: 3 of 6 towers found, zones 77% / 82%, a false 0.02 m violation). The
+  tower and line graph was built for it, so it is not held out either.
+- On t2z5 the reference is weak too: it is our own Phase 2 run on the hand-labelled points,
+  and at the junction it rejects two merged clusters. 8 of the 9 zones counted as false are
+  measured to conductors made entirely of hand-labelled wire, fitted to 2.5-4 cm, that the
+  reference does not model; the 85% zone precision is a lower bound.
 
 Details per phase below.
 
@@ -194,25 +194,46 @@ Caveats:
 - A tree that has grown into the wires could be absorbed into a pylon cluster only if it is
   also lattice-smooth and within 15 m of a tower; worth a dedicated check in Phase 3.
 
-## Phase 2: conductor model (`clearance/spans.py`, `clearance/catenary.py`)
+## Phase 2: conductor model (`graph.py`, `spans.py`, `catenary.py`)
 
-1. **Towers**: connected clusters of pylon points (>= 200 voxels); pieces within 10 m of
-   each other are one tower. Centre = median xy. Plus towers found **from the wires**
-   (`spans.towers_from_wires`), which catches towers Phase 1 missed (forest):
-   - the conductors' upper envelope (90th percentile of wire z per 1 m along the line)
-     kinks downwards at a tower: the slope over 15 m before minus the slope over 15 m after
-     is > 0.03, where a catenary alone gives a negative value;
-   - and the line's centre column (2.5 m radius), between the lowest conductor - 3 m and the
-     top wire - 1 m, holds >= 300 points that are neither ground nor wire. At mid-span that
-     column is open air (vegetation must stay below the conductors); a tower body fills it.
-     The column is slid +-8 m along the line to centre on the body.
-   Kinks alone fire at tile edges and where the envelope switches conductor; on the three
-   tiles, true towers had 2,300-7,300 centre-column points, false kinks 0-59.
-   Wire-found towers within 20 m of a pylon-cluster tower are dropped as duplicates.
-2. **Spans**: a route through the tower centres, ordered along the line, extended past the
-   end towers to where the wire points stop (tiles cut spans off). Each wire point goes to
-   the nearest route segment in plan view. Spans between two towers are *full*, the rest
-   *partial*.
+A tile can hold several lines and junctions, so towers and spans form a graph
+(`graph.build_line_graph`). The first version ordered towers along one axis and cut one
+route into spans; at the t2z5 junction (four towers within 60 m, a second line leaving) it
+found 3 of 6 towers and modelled conductors through the junction.
+
+1. **Towers**, from three sources, merged within 8 m (earlier source wins):
+   - *pylon clusters*: connected pylon points (>= 200 voxels), pieces within 10 m merged;
+   - *kinks*, per direction group: wire points are grouped by their direction in plan
+     (circular histogram peaks), and for each group the conductors' upper envelope (90th
+     percentile of wire z per 1 m) must kink downwards (slope 15 m before minus 15 m after
+     > 0.03; a catenary alone gives a negative value) **and** the line's centre column
+     (2.5 m radius, between the lowest conductor - 3 m and the top wire - 1 m, slid +-8 m)
+     must hold >= 300 points that are neither ground nor wire. At mid-span that column is
+     open air (vegetation must stay below the conductors); a tower body fills it. Kinks
+     alone fire at tile edges and where the envelope switches conductor: true towers had
+     2,300-7,300 centre-column points, false kinks 0-59.
+   - *direction changes*: wires do not bend in mid-air. Where wire points within 6 m (3D)
+     run in clearly different plan directions (doubled-angle mean resultant < 0.9, about
+     26 degrees), there is an angle or junction tower. A candidate where every direction
+     carries on past it is a **crossing** of two lines, not a tower, and is dropped (t2z5
+     had one on its main span).
+   - *terminals* (second pass): a partial span >= 30 m long that stops while the survey goes
+     on (ground beyond) at structure at wire height ends on a terminal tower. Not at a tile
+     edge (no ground beyond), nor within 25 m of a known tower (jumper pieces).
+   On the four tiles every true tower is found, within 0.0-2.6 m; no false ones. Moving
+   wire-found towers onto the densest "steel" column was tried and pulled forest towers
+   8-9 m off, onto the canopy.
+2. **Spans** (graph edges):
+   - two towers are joined if wire points running along the line between them (within
+     12 m, direction within 20 degrees) cover >= 60% of it;
+   - an edge is a bypass, and dropped, if a third tower lies within its 12 m corridor, or
+     forms a triangle of edges with it while lying within 15% of its length of the line
+     (t1z6a's 389 m bypass passed the middle tower at 12.07 m);
+   - wire points go to the nearest edge, only beside it (not past its towers), aligned or
+     next to a tower;
+   - wire leaving a tower that no edge explains becomes a partial span (a ray) to where it
+     stops; wire near no tower becomes a tower-less span.
+   Spans between two towers are *full*, the rest *partial*.
 3. **Conductors**: in each span, cluster (DBSCAN, eps 0.5 m) on lateral offset and height
    above a common quadratic. Parallel wires keep a constant offset, so each collapses to a
    blob however patchy it is along the span. Bundled sub-conductors stay one conductor.
@@ -241,21 +262,27 @@ Caveats:
 
 ### Results
 
-Alpine tiles: 2 towers, 3 spans (one full span, two cut off by the tile edge), 7 conductors
-in every span: a double circuit (2 x 3 phases) plus an earth wire. Forest tile: 3 towers
-(all found from the wires), 4 spans (two full), 5 conductors in every span.
+Alpine tiles: 2 towers, one full span and partial spans to the tile edges, 7 conductors per
+span: a double circuit (2 x 3 phases) plus an earth wire. Forest tile: 3 towers (all found
+from the wires), two full spans, 5 conductors per span. Junction tile: 6 towers, 12 spans
+(4 full, from 18 m to 359 m).
 
-| | t5c2 | t5b6 (held out) | t1z6a (forest) |
-|---|---|---|---|
-| full span length | 191 m | 239 m | 156 m, 236 m |
-| vertical RMSE, all conductors | 2.8-5.0 cm | 3.0-5.5 cm | 2.9-4.1 cm |
-| lowest ground clearance | 10.5 m | 10.8 m | |
-| conductors per span (hand labels) | 7/7/7 (7/7/7) | 7/7/7 (7/7/7) | 5/5/5/5 (5/5/5/5) |
-| conductors matching the truth-label model | 21 / 21 | 21 / 21 | 20 / 20 |
-| max height difference to the truth-label model | 1.7 cm | 3.8 cm | 0.6 cm |
+| | t5c2 | t5b6 (held out) | t1z6a (forest) | t2z5 (junction) |
+|---|---|---|---|---|
+| towers found (true) | 2 (2) | 2 (2) | 3 (3) | 6 (6) |
+| spans (full) | 3 (1) | 5 (1) | 5 (2) | 12 (4) |
+| conductors (hand-label model) | 21 (21) | 22 (22) | 21 (21) | 39 (35) |
+| conductors matching the hand-label model | 21 | 22 | 20 | 32 |
+| vertical RMSE, all conductors | 2.8-5.0 cm | 3.0-6.3 cm | 2.7-4.0 cm | 2.3-20 cm |
+| height difference to the hand-label model, median / max | 0.0 / 1.7 cm | 0.5 / 2.6 cm | 0.0 / 0.2 cm | 0.3 / 22 cm |
 
-Without the wire-found towers, the forest tile gave 0 towers, one 600 m "span" and no
-usable conductor; without the re-clustering, 18 of its 20 conductors.
+- Without the wire-found towers, the forest tile gave 0 towers, one 600 m "span" and no
+  usable conductor; without the re-clustering, 18 of its 20 conductors.
+- With the graph, t5b6's steep partial span is modelled as far as the hand-label model
+  (before: 30 m short, see Phase 3).
+- t2z5: the 7 unmatched and the 22 cm differences are at the junction, where the
+  hand-label model itself rejects merged clusters (above); our 4 extra conductors are made
+  entirely of hand-labelled wire.
 
 **Classification errors barely move the geometry**: even on t5b6, where 20% of predicted
 wire points are wrong, every conductor fitted from predicted points is within 3.8 cm of the
@@ -276,8 +303,10 @@ Synthetic check (tests): c = 900 m and sag 2.35 m are recovered within 3% and 5 
   determined. Joining neighbouring tiles fixes this.
 - Bundled conductors are modelled at the bundle centre; Phase 3 should subtract the
   bundle radius.
-- One line per tile is assumed (the route is one polyline). Parallel lines would need
-  tower-to-tower matching per line.
+- Graph: a terminal tower is only found at the end of a partial span >= 30 m long, so a
+  terminal within 25-30 m of the previous tower stays a partial span (tested). At the t2z5
+  junction a 14 m link between two towers is not found (not yet investigated) and becomes
+  rays. Several parallel lines sharing towers are not told apart.
 - The fit is the line *as surveyed*. Max sag (hot conductor) and blowout (wind) are Phase 3.
 
 ## Phase 3: vegetation clearance (`scenarios.py`, `encroach.py`, `hazard.py`)
@@ -340,30 +369,34 @@ they share a point; hazard trees match within 2 m in plan.
 
 | | synthetic | t5c2 | t5b6 | t1z6a (forest) | t2z5 (junction) |
 |---|---|---|---|---|---|
-| ours: min clearance surveyed / max sag / blowout | 1.57 / 0.32 / 1.59 m | 9.26 / 7.64 / 9.31 m | 9.87 / 8.05 / 10.10 m | 1.19 / 0.34 / 0.88 m | 0.02 / 0.02 / 0.06 m |
-| reference (all hand labels) | | 12.07 / 11.00 / 12.33 m | 8.41 / 6.53 / 9.26 m | 1.19 / 0.37 / 0.96 m | 1.22 / 1.18 / 1.42 m |
-| ours: zones violation / urgent / monitor | 1 / 0 / 1 | 0 | 0 | 9 / 10 / 24 | 10 / 18 / 24 |
-| reference | 1 / 0 / 1 | 0 | 0 | 10 / 9 / 26 | 9 / 17 / 23 |
-| **end to end**: zones precision / recall | 1.0 / 1.0 | | | **1.0 / 1.0** | 0.77 / 0.82 |
-| end to end: same tier (matched pairs) | 2 / 2 | | | 43 / 45 | 36 / 42 |
-| end to end: flagged points precision / recall | 1.0 / 1.0 | | | 0.98 / 0.99 | 0.62 / 0.76 |
-| end to end: hazard trees precision / recall | 1.0 / 1.0 | | | 0.95 / 1.0 | 0.73 / 0.93 |
-| same model: zones precision / recall | | | | 1.0 / 1.0 | 0.90 / 1.0 |
-| sag/wind not assessed (short pieces) | 0 | 0 of 21 | 0 of 21 | 0 of 20 | 10 of 26 |
+| ours: min clearance surveyed / max sag / blowout | 1.57 / 0.32 / 1.59 m | 9.26 / 7.64 / 9.31 m | 8.41 / 6.51 / 9.24 m | 0.69 / 0.38 / 0.97 m | 1.23 / 0.84 / 0.53 m |
+| reference (all hand labels) | | 12.07 / 11.00 / 12.33 m | 8.41 / 6.51 / 9.24 m | 1.19 / 0.37 / 0.96 m | 1.24 / 0.74 / 0.10 m |
+| ours: zones violation / urgent / monitor | 1 / 0 / 1 | 0 | 0 | 11 / 9 / 27 | 13 / 18 / 27 |
+| reference | 1 / 0 / 1 | 0 | 0 | 10 / 9 / 27 | 11 / 15 / 23 |
+| **end to end**: zones precision / recall | 1.0 / 1.0 | | | **0.98 / 1.0** | 0.85 / 0.96 |
+| end to end: same tier (matched pairs) | 2 / 2 | | | 45 / 46 | 41 / 50 |
+| end to end: flagged points precision / recall | 1.0 / 1.0 | | | 0.92 / 1.0 | 0.86 / 0.91 |
+| end to end: hazard trees precision / recall | 1.0 / 1.0 | | | 0.94 / 1.0 | 0.76 / 0.96 |
+| same model: zones precision / recall | | | | 1.0 / 1.0 | 0.98 / 1.0 |
+| sag/wind not assessed (short pieces) | 0 | 0 of 21 | 1 of 22 | 1 of 21 | 6 of 39 |
 
-- Forest (t1z6a): every reference zone is found, in the same tier for 43 of 45 pairs (zone
-  boundaries split slightly differently), with no false zones. Max sag is the worst case
-  for 28 zones, blowout for 15 (14 of them to the same side). The first run had 3 false
-  zones (tower steel at the attachments, fixed by the tower exclusion) and no conductors at
-  all before Phase 2 learned to find towers from the wires.
-- Junction (t2z5): see [Results at a glance](#results-at-a-glance). The same-model score
-  (90% / 100%) looks fine because both runs share the wrong conductors; the end-to-end
-  score shows the real effect.
-- t5b6, coverage: the reference finds vegetation at 8.41 m that we report as 9.87 m. Not a
-  distance error: on the steep partial span 2, Phase 1 labels too few of the sparse far wire
-  points, so our conductors cover 68-93 m of the span against 92-132 m in the reference, and
-  vegetation beyond a model's end is not assessed. Reporting the unmodelled stretch of each
-  span is an open item.
+- Forest (t1z6a): every reference zone is found, in the same tier for 45 of 46 pairs (zone
+  boundaries split slightly differently). One extra zone (monitor, 5.45 m) is measured to a
+  13 m piece of wire just past a tower. Max sag is the worst case for 29 zones, blowout for
+  16. The first run had 3 false zones (tower steel at the attachments, fixed by the tower
+  exclusion) and no conductors at all before Phase 2 learned to find towers from the wires.
+  Our closest point as surveyed is 0.69 m against the reference's 1.19 m (not yet
+  investigated; at max sag and in blowout the two agree to 0.01 m).
+- Junction (t2z5): before the graph, zones were 77% / 82% end to end with a false 0.02 m
+  violation; the same-model score (90% / 100%) had looked fine because both runs shared the
+  wrong conductors. Now 85% / 96%; 8 of the 9 extra zones are on conductors of hand-labelled
+  wire that the reference fails to model (see [Results at a glance](#results-at-a-glance)).
+  Blowout differs most (0.53 m vs 0.10 m): at the junction the two models' spans differ,
+  so their chords and swings differ.
+- t5b6, coverage: with the single-route model our partial span stopped 30 m short and the
+  closest vegetation (8.41 m) was missed; the graph models it and the results now match the
+  reference exactly. Vegetation beyond the end of a conductor model is still not assessed,
+  and the report does not yet say where that happens.
 - Synthetic: the 22 m tree planted 4 m off the line is a violation at max sag (0.32 m;
   1.57 m as surveyed), the 19 m tree is on the watch list (4.56 m, ~1.6 years at 1 m/yr).
   Tests check the hot-wire sag against the parabolic formula, the blowout swing against
@@ -379,9 +412,9 @@ they share a point; hazard trees match within 2 m in plan.
 
 ### Limits
 
-- **Junctions and several lines per tile are not supported.** The line is one route
-  through the towers; towers closer than 50 m are not found from the wires. On t2z5 this
-  gives a false violation and misses 9 of 49 zones. Needed: a graph of towers and lines.
+- Junctions are handled by the tower and line graph (Phase 2), but validated on one
+  junction only, and the reference there is itself imperfect (it rejects merged clusters):
+  a better reference at junctions would need hand-checked conductors.
 - Vegetation beyond the end of a conductor model (sparse far stretch of a partial span) is
   not assessed, and the report does not yet say where that happens.
 - Real encroachments are validated on two tiles (t1z6a, t2z5), both with fixes made after

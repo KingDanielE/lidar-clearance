@@ -84,7 +84,7 @@ def _kinks(s: np.ndarray, z: np.ndarray, step: float = 1.0, window: float = 15.0
 
 def towers_from_wires(
     points, labels, min_kink: float = 0.03, min_steel: int = 300, column_r: float = 2.5,
-    slide: float = 8.0, separation: float = 50.0,
+    slide: float = 8.0, separation: float = 50.0, wire_mask=None,
 ) -> list[Tower]:
     """Towers the pylon classification missed (in forest a tower is fused with the canopy).
 
@@ -92,12 +92,15 @@ def towers_from_wires(
     centre column, between the lowest conductor and the top wire, holds structure that is
     neither ground nor wire. At mid-span that column is open air: vegetation must stay below
     the conductors. The column is slid along the line to find the tower body exactly.
+
+    `wire_mask` restricts the wires to one direction group (graph.py), so that lines
+    running in different directions each get their own axis.
     """
     from scipy.spatial import cKDTree
 
     from .classes import GROUND, WIRE
 
-    w = points[labels == WIRE]
+    w = points[(labels == WIRE) if wire_mask is None else wire_mask]
     other = points[(labels != WIRE) & (labels != GROUND)]
     if len(w) < 200 or len(other) == 0:
         return []
