@@ -1,0 +1,6 @@
+numpy==2.5.4
+scipy==1.18.1
+laspy==2.7.0
+matplotlib==3.11.2
+scikit-learn==1.9.1
+pytest==9.1.1

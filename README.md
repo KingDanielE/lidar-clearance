@@ -1,30 +1,89 @@
 # Tree-to-line clearance from LiDAR
 
-- Phase 1: classify a LiDAR tile into ground, vegetation, wires, pylons and buildings.
-- Phase 2: find the towers, split the line into spans and fit a catenary to every conductor.
-- Phase 3: vegetation clearance as surveyed, at max sag and in blowout; encroachment zones;
-  hazard (fall-in) trees.
+How close is the vegetation to a power line, and will it still be clear on a hot day or in
+a strong wind? This pipeline answers that from a raw LiDAR point cloud, in three phases:
+
+- **Phase 1**: classify the cloud into ground, vegetation, wires, pylons and buildings.
+- **Phase 2**: find the towers, split the line into spans and fit a catenary to every
+  conductor.
+- **Phase 3**: vegetation clearance as surveyed, at max sag and in wind blowout; tiered
+  encroachment zones; hazard (fall-in) trees.
+
+Plain Python (NumPy, SciPy, laspy), rule-based and physics-based, no trained model. Checked
+against hand-labelled drone LiDAR of a high-voltage line in the Alps
+([GridNet-HD](#data-and-credit)), on a tile used for tuning and a held-out one.
+
+## Results at a glance
+
+On the held-out tile (t5b6, 36 M points, parameters not tuned on it):
+
+| Phase | Result |
+|---|---|
+| 1. Classification | wire recall 97% (IoU 0.79), pylon IoU 0.87, ground IoU 0.97 |
+| 2. Conductor model | 21 of 21 conductors found; fit RMSE 3.0-5.5 cm; within 3.8 cm of a fit to the hand labels |
+| 3. Clearance | closest vegetation 9.87 m as surveyed, 8.05 m at max sag; same as with the hand labels |
+
+**Phase 1**: predicted classes (top) against the hand labels (bottom), along the line.
+
+![Phase 1: predicted vs hand-labelled classes along the line](docs/phase1_profile_t5b6.png)
+
+**Phase 2**: catenaries (black) fitted to each conductor's points, per span: a double
+circuit (2 x 3 phases) plus an earth wire.
+
+![Phase 2: fitted catenaries per span](docs/phase2_spans_t5b6.png)
+
+**Phase 3**: clearance on a synthetic corridor with known trees (the real line is clear).
+The tall tree near mid-span violates the 3 m clearance once the conductor sags at 80 C
+(dashed red); the next one is on the watch list.
+
+![Phase 3: vegetation clearance along a synthetic corridor](docs/phase3_profile_synthetic.png)
+
+Cross-section of the real line at mid-span: each conductor as surveyed (black), at max sag
+(red) and swung by wind (blue), with the 3 m clearance circles.
+
+![Phase 3: cross-section with sag and blowout positions](docs/phase3_section_t5b6.png)
 
 ## Run
 
 ```bash
 uv venv --python 3.12 .venv
-uv pip install --python .venv numpy scipy laspy matplotlib scikit-learn pytest
-.venv/Scripts/python -m scripts.run_phase1 --synthetic --out out/synthetic
+uv pip install --python .venv -r requirements.txt
+.venv/Scripts/python -m pytest   # Windows path; bin/ on macOS/Linux
+```
+
+Get the two GridNet-HD tiles (1.2 and 1.4 GB, see [Data and credit](#data-and-credit)):
+
+```bash
+mkdir -p data
+curl -L -o data/t5c2.las https://huggingface.co/datasets/heig-vd-geo/GridNet-HD/resolve/main/t5c2/lidar/t5c2.las
+curl -L -o data/t5b6.las https://huggingface.co/datasets/heig-vd-geo/GridNet-HD/resolve/main/t5b6/lidar/t5b6.las
+```
+
+Run the three phases on a tile (or `run_phase1 --synthetic` for the generated corridor):
+
+```bash
 .venv/Scripts/python -m scripts.run_phase1 data/t5c2.las --truth-field ground_truth --truth-map gridnet --out out/t5c2
 .venv/Scripts/python -m scripts.run_phase2 out/t5c2/t5c2_classified_voxels.las --out out/t5c2
 .venv/Scripts/python -m scripts.run_phase3 out/t5c2/t5c2_classified_voxels.las --out out/t5c2 [--mvcd 3 --t-max 80 --wind-pa 300]
-.venv/Scripts/python -m pytest
 ```
 
-Outputs per tile: `<name>_report.md/.json` (scores + confusion matrix), `<name>_plan.png`,
+Phase 1 writes `<name>_report.md/.json` (scores + confusion matrix), `<name>_plan.png`,
 `<name>_profile.png` (predicted vs truth along the line), `<name>_3d.png`, and
-`<name>_classified_voxels.las` (open in CloudCompare).
+`<name>_classified_voxels.las` (open in CloudCompare), which Phases 2 and 3 read.
 
-Data: `data/t5c2.las` is zone t5c2 of [GridNet-HD](https://huggingface.co/datasets/heig-vd-geo/GridNet-HD)
-(CC BY 4.0, UAV LiDAR, 30.6 M points, 268 x 581 m, 236 m relief).
+## Data and credit
 
-## Method (`clearance/`)
+The LiDAR data is [GridNet-HD](https://huggingface.co/datasets/heig-vd-geo/GridNet-HD)
+(HEIG-VD), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): UAV LiDAR
+and imagery of high-voltage lines with per-point labels. This project uses zones t5c2
+(30.6 M points, 268 x 581 m, 236 m relief) and t5b6 (36.1 M points, 328 x 747 x 223 m). The
+data is not included in this repository, and the plots in `docs/` are derived from it.
+
+> Antoine Carreaud, Shanci Li, Malo De Lacour, Digre Frinde, Jan Skaloud, Adrien Gressin.
+> *GridNet-HD: A High-Resolution Multi-Modal Dataset for LiDAR-Image Fusion on Power Line
+> Infrastructure.* arXiv:2601.13052, 2026. https://arxiv.org/abs/2601.13052
+
+## Phase 1: classification (`ground.py`, `features.py`, `classify.py`)
 
 1. `io.voxel_downsample`: 0.15 m voxels (30.6 M -> 5.5 M points); labels are copied back
    to every original point at the end.
@@ -43,7 +102,7 @@ Data: `data/t5c2.las` is zone t5c2 of [GridNet-HD](https://huggingface.co/datase
    - **buildings**: smooth (scattering < 0.05) mostly planar clusters, >= 2 m wide.
    - **vegetation**: everything else above ground.
 
-## Results
+### Results on t5c2 (tuning tile)
 
 Full resolution, every point scored against GridNet-HD labels (grass, rock, road -> ground;
 insulators -> pylon; conductors and structural cables -> wire).
@@ -222,3 +281,8 @@ conductor. Set them from the utility's standard and the line's design data.
   check.
 - One survey temperature for the whole flight; no conductor creep; no ice load.
 - Clearance is to the conductor centreline (`conductor_radius_m` = 0; set the bundle radius).
+
+## Licence
+
+Code: [MIT](LICENSE). Data and the plots derived from it: GridNet-HD, CC BY 4.0 (see
+[Data and credit](#data-and-credit)).
