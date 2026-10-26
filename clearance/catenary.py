@@ -192,7 +192,9 @@ def _near_towers(points, span: Span, margin: float) -> np.ndarray:
     return out
 
 
-def validate(c: Conductor, min_points: int, min_coverage: float, min_extent: float, max_rmse: float) -> str | None:
+def validate(
+    c: Conductor, min_points: int, min_coverage: float, min_extent: float, max_rmse: float, span: Span | None = None,
+) -> str | None:
     if not np.all(np.isfinite([c.z0, c.u0, c.c, c.rmse_z])):
         return "fit did not converge"
     # Short spans (15-30 m at junctions) carry fewer points: 3 per metre, capped.
@@ -208,6 +210,10 @@ def validate(c: Conductor, min_points: int, min_coverage: float, min_extent: flo
     if c.rmse_z > max_rmse:
         # Real conductors fit to a few cm; this is not a hanging wire.
         return f"rmse {100 * c.rmse_z:.0f} cm"
+    if span is not None and span.tower_a is not None and not (c.at_tower_a or c.at_tower_b) and c.u_max - c.u_min < 30.0:
+        # Wire leaving a tower starts at it. A short piece in a tower's span that does not
+        # reach the tower was a mix of jumper, vegetation and unlabelled points (t1z6a).
+        return "short piece detached from its tower"
     return None
 
 
@@ -237,7 +243,7 @@ def fit_spans(
         local = Span(span.id, span.a, span.b, span.tower_a, span.tower_b, idx)
         def fit_group(g, eps):
             c = fit_conductor(points, g, local, 0, ground_tree, ground_z, tower_reach=tower_margin + 5.0)
-            c.rejected = validate(c, min_points, min_coverage, min_extent, max_rmse)
+            c.rejected = validate(c, min_points, min_coverage, min_extent, max_rmse, local)
             # Two conductors bridged by stray points fail on RMSE: split tighter and retry.
             if c.rejected and c.rejected.startswith("rmse") and len(g) >= 2 * min_points and eps > 0.15:
                 sub = Span(local.id, local.a, local.b, local.tower_a, local.tower_b, g)

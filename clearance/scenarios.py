@@ -1,14 +1,27 @@
-"""Where each conductor can be: as surveyed, hot (max sag) and blown sideways (blowout).
+"""Where each conductor can be: as surveyed, hot, iced and blown sideways.
 
-Max sag. A hotter conductor is longer: S_hot = S (1 + alpha dT). The new catenary passes
-through the same two attachment points with that arc length. This ignores the elastic
-shortening that comes with the lower tension of a hotter wire, so it slightly overstates
-the sag: the safe side for clearance. A sag-tension program (PLS-CADD, ruling span) is the
-production replacement.
+Defaults follow the Swiss Leitungsverordnung (LeV, SR 734.31) for high-voltage overhead
+lines ("Starkstromfreileitungen"):
+- greatest sag (Art. 47): the worse of a conductor at 40 C, and a conductor at 0 C with a
+  uniform additional load (snow/ice) of 20 N/m per conductor or sub-conductor, no wind;
+- wind deflection (definitions, no. 37; Annex 4): conductor at 10 C, 500 N/m2 on wires.
+Conductor data are typical for an AAAC/Aldrey (AlMgSi) 600 mm2 class conductor, the kind
+used on Swiss lines; they are not the surveyed line's datasheet.
 
-Blowout. Wind pushes the conductor sideways; it swings as a rigid curve about the chord
-between its attachment points by theta = atan(wind load / weight per metre). Both sides
-are checked.
+Sag-tension (`state_change`). Each conductor's fitted catenary gives its horizontal tension
+at the survey: H1 = c * w. The change-of-state equation of a span of horizontal length L,
+
+    H2^2 [H2 - H1 + EA w1^2 L^2 / (24 H1^2) + EA alpha (t2 - t1)] = EA w2^2 L^2 / 24,
+
+gives the tension H2 at another temperature t2 and load w2, including the elastic relief
+of a hotter or loaded wire. The new catenary (c2 = H2 / w2) passes through the same two
+attachment points. Parabolic and per actual span (no ruling span, no creep); with a very
+stiff conductor (EA -> infinity) it reduces to pure thermal elongation.
+
+Blowout. Wind pushes the conductor sideways: the loaded catenary (c = H / sqrt(w^2 + q^2),
+tension from the change of state at the wind temperature) swings as a rigid curve about the
+chord between its attachment points by theta = atan(q / w), q = wind pressure * diameter.
+Both sides are checked.
 
 Attachment points come from what each conductor's own data reaches (Conductor.at_tower_a/b):
 - both towers: exact.
@@ -30,29 +43,57 @@ from .catenary import Conductor
 from .spans import Span
 
 AS_SURVEYED = "as_surveyed"
-MAX_SAG = "max_sag"
+MAX_SAG = "max_sag"  # hot: t_max_c
+MAX_SAG_ICE = "max_sag_ice"  # 0 C with snow/ice load
 BLOWOUT_LEFT = "blowout_left"
 BLOWOUT_RIGHT = "blowout_right"
-SCENARIOS = [AS_SURVEYED, MAX_SAG, BLOWOUT_LEFT, BLOWOUT_RIGHT]
+SCENARIOS = [AS_SURVEYED, MAX_SAG, MAX_SAG_ICE, BLOWOUT_LEFT, BLOWOUT_RIGHT]
+WIND_SCENARIOS = (BLOWOUT_LEFT, BLOWOUT_RIGHT)
 
 
 @dataclass
 class LineParams:
-    """Conductor and weather assumptions. Placeholders: set from the line's design data."""
+    """Conductor and weather assumptions; defaults per the Swiss LeV (see module docstring).
+    The survey temperature and the conductor are assumptions: set them from flight records
+    and the line's design data."""
 
-    t_survey_c: float = 15.0  # conductor temperature during the LiDAR flight
-    t_max_c: float = 80.0  # maximum operating temperature
-    t_wind_c: float = 15.0  # conductor temperature in the blowout case
-    alpha_per_c: float = 19.3e-6  # thermal expansion, ACSR
-    diameter_m: float = 0.0286  # ACSR "Zebra"-like
-    weight_n_per_m: float = 15.9
-    wind_pressure_pa: float = 300.0
+    t_survey_c: float = 15.0  # conductor temperature during the LiDAR flight (assumed)
+    t_max_c: float = 40.0  # LeV Art. 47 a (operators may rate lines hotter: raise it)
+    t_ice_c: float = 0.0  # LeV Art. 47 b
+    ice_n_per_m: float = 20.0  # LeV Art. 47 b, per conductor or sub-conductor
+    t_wind_c: float = 10.0  # LeV definitions no. 37
+    wind_pressure_pa: float = 500.0  # LeV Annex 4: wires and ropes
+    alpha_per_c: float = 23.0e-6  # AAAC / AlMgSi
+    diameter_m: float = 0.0319  # AAAC 600 mm2 class
+    weight_n_per_m: float = 16.3
+    area_mm2: float = 600.0
+    e_modulus_gpa: float = 57.0
     assumed_span_m: float | None = None  # partial spans; default: median full span, else 300
     min_estimate_m: float = 30.0  # shortest one-tower piece whose sag and wind are estimated
 
     @property
     def swing_rad(self) -> float:
         return math.atan(self.wind_pressure_pa * self.diameter_m / self.weight_n_per_m)
+
+    @property
+    def ea_n(self) -> float:
+        return self.e_modulus_gpa * 1e9 * self.area_mm2 * 1e-6
+
+
+def state_change(h1: float, w1: float, t1: float, w2: float, t2: float, span: float, ea: float, alpha: float) -> float:
+    """Horizontal tension H2 at temperature t2 and load w2 (N/m), from H1 at t1 and w1.
+    Parabolic change-of-state equation (module docstring); one positive root."""
+    k = h1 - ea * w1**2 * span**2 / (24 * h1**2) - ea * alpha * (t2 - t1)
+    rhs = ea * w2**2 * span**2 / 24
+
+    def f(h):
+        return h * h * (h - k) - rhs
+
+    lo = max(k, 0.0) + 1e-9
+    hi = max(lo * 2, 1.0)
+    while f(hi) < 0:
+        hi *= 2
+    return brentq(f, lo, hi)
 
 
 @dataclass
@@ -103,10 +144,21 @@ def _cat(z0, u0, c, u):
     return z0 + c * (np.cosh((u - u0) / c) - 1.0)
 
 
-def hot_params(cond: Conductor, ua: float, ub: float, dt: float, alpha: float):
+def through_c(a: float, za: float, b: float, zb: float, c: float):
+    """Catenary (z0, u0, c) with parameter c through (a, za) and (b, zb)."""
+    L, h = b - a, zb - za
+    u0 = a + L / 2 - c * math.asinh(h / (2 * c * math.sinh(L / (2 * c))))
+    z0 = za - c * (math.cosh((a - u0) / c) - 1.0)
+    return z0, u0, c
+
+
+def loaded_params(cond: Conductor, ua: float, ub: float, w2: float, t2: float, p: LineParams):
+    """The conductor's catenary at temperature t2 under load w2 (N/m), through the same
+    attachment points: tension from the change of state, shape c = H2 / w2."""
     za, zb = float(cond.z(ua)), float(cond.z(ub))
-    s = arc_length(cond.z0, cond.u0, cond.c, ua, ub) * (1 + alpha * dt)
-    return through_points(ua, za, ub, zb, s)
+    w1 = p.weight_n_per_m
+    h2 = state_change(cond.c * w1, w1, p.t_survey_c, w2, t2, ub - ua, p.ea_n, p.alpha_per_c)
+    return through_c(ua, za, ub, zb, h2 / w2)
 
 
 def swing(cond: Conductor, params, ua: float, ub: float, u: np.ndarray, theta: float, side: int):
@@ -140,9 +192,13 @@ def curves(conductors: list[Conductor], spans: list[Span], p: LineParams, step: 
         if att is None:
             continue  # not assessed for sag and wind
         ua, ub, est = att
-        hot = hot_params(cond, ua, ub, p.t_max_c - p.t_survey_c, p.alpha_per_c)
+        w = p.weight_n_per_m
+        hot = loaded_params(cond, ua, ub, w, p.t_max_c, p)
         out.append(Curve(MAX_SAG, cond, _xyz(cond, u, _cat(*hot, u)), est))
-        windy = hot_params(cond, ua, ub, p.t_wind_c - p.t_survey_c, p.alpha_per_c)
+        iced = loaded_params(cond, ua, ub, w + p.ice_n_per_m, p.t_ice_c, p)
+        out.append(Curve(MAX_SAG_ICE, cond, _xyz(cond, u, _cat(*iced, u)), est))
+        # In wind the conductor hangs in the plane of its resultant load.
+        windy = loaded_params(cond, ua, ub, math.hypot(w, p.wind_pressure_pa * p.diameter_m), p.t_wind_c, p)
         out.append(Curve(BLOWOUT_LEFT, cond, swing(cond, windy, ua, ub, u, theta, +1), est))
         out.append(Curve(BLOWOUT_RIGHT, cond, swing(cond, windy, ua, ub, u, theta, -1), est))
     return out, assumed

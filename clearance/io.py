@@ -34,6 +34,20 @@ def read_las(path, label_field: str | None = None) -> Cloud:
     return Cloud(pts, origin, labels, crs)
 
 
+def read_many(paths, label_field: str | None = None) -> Cloud:
+    """Several neighbouring tiles as one cloud (same CRS assumed), on a shared origin, so a
+    span cut by a tile edge becomes whole again."""
+    clouds = [read_las(p, label_field) for p in paths]
+    if len(clouds) == 1:
+        return clouds[0]
+    origin = np.min([c.origin for c in clouds], axis=0)
+    pts = np.vstack([(c.points.astype(np.float64) + (c.origin - origin)).astype(np.float32) for c in clouds])
+    labels = None
+    if all(c.labels is not None for c in clouds):
+        labels = np.concatenate([c.labels for c in clouds])
+    return Cloud(pts, origin, labels, clouds[0].crs)
+
+
 def voxel_downsample(points: np.ndarray, size: float) -> tuple[np.ndarray, np.ndarray]:
     """One point per occupied voxel (the voxel centroid).
 

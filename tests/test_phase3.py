@@ -28,24 +28,54 @@ def test_through_points_round_trip():
     assert got == pytest.approx((z0, u0, c), rel=1e-6)
 
 
-def test_hot_conductor_sags_by_the_expected_amount(corridor):
-    # Parabolic check: S - L = 8 s^2 / (3 L), so a longer wire gives s' = sqrt(3 L (S' - L) / 8).
-    _, _, model, curves, line = corridor
+def _drop(model, line, scenario):
     cond = model.conductors[0]
-    span = next(s for s in model.spans if s.id == cond.span_id)
-    L = cond.u_max - cond.u_min
-    s0 = cond.sag
-    S = L + 8 * s0**2 / (3 * L)
-    S_hot = S * (1 + line.alpha_per_c * (line.t_max_c - line.t_survey_c))
-    expected = math.sqrt(3 * L * (S_hot - L) / 8)
-    surveyed = next(c for c in curves if c.conductor is cond and c.scenario == scenarios.AS_SURVEYED)
-    hot = next(c for c in curves if c.conductor is cond and c.scenario == scenarios.MAX_SAG)
-    drop = float(np.max(surveyed.xyz[:, 2] - hot.xyz[:, 2]))
-    assert span.full
-    assert drop == pytest.approx(expected - s0, abs=0.05)
+    curves, _ = scenarios.curves([cond], model.spans, line)
+    surveyed = next(c for c in curves if c.scenario == scenarios.AS_SURVEYED)
+    moved = next(c for c in curves if c.scenario == scenario)
     # Attachment points do not move.
-    assert hot.xyz[0, 2] == pytest.approx(surveyed.xyz[0, 2], abs=0.01)
-    assert hot.xyz[-1, 2] == pytest.approx(surveyed.xyz[-1, 2], abs=0.01)
+    assert moved.xyz[0, 2] == pytest.approx(surveyed.xyz[0, 2], abs=0.01)
+    assert moved.xyz[-1, 2] == pytest.approx(surveyed.xyz[-1, 2], abs=0.01)
+    mid = len(surveyed.xyz) // 2  # change at mid-span: > 0 sags further, < 0 lifts
+    return float(surveyed.xyz[mid, 2] - moved.xyz[mid, 2]), cond
+
+
+def test_stiff_conductor_reduces_to_thermal_elongation(corridor):
+    # With EA -> infinity the change of state is pure elongation. Parabolic check:
+    # S - L = 8 s^2 / (3 L), so a wire longer by alpha dT S sags s' = sqrt(3 L (S' - L) / 8).
+    _, _, model, _, _ = corridor
+    line = scenarios.LineParams(e_modulus_gpa=1e9)
+    drop, cond = _drop(model, line, scenarios.MAX_SAG)
+    L = cond.u_max - cond.u_min
+    S = L + 8 * cond.sag**2 / (3 * L)
+    S_hot = S * (1 + line.alpha_per_c * (line.t_max_c - line.t_survey_c))
+    assert drop == pytest.approx(math.sqrt(3 * L * (S_hot - L) / 8) - cond.sag, abs=0.03)
+
+
+def test_elastic_relief_reduces_the_hot_sag(corridor):
+    _, _, model, _, line = corridor
+    stiff, _ = _drop(model, scenarios.LineParams(e_modulus_gpa=1e9), scenarios.MAX_SAG)
+    real, _ = _drop(model, line, scenarios.MAX_SAG)
+    assert 0 < real < stiff  # a hotter wire also loses tension, stretches less elastically
+
+
+def test_ice_load_sags_the_wire(corridor):
+    _, _, model, _, line = corridor
+    ice, cond = _drop(model, line, scenarios.MAX_SAG_ICE)
+    no_ice, _ = _drop(model, scenarios.LineParams(ice_n_per_m=0.0), scenarios.MAX_SAG_ICE)
+    # 130 m span, 2.35 m sag at 15 C: cooling to 0 C alone lifts the wire (~0.38 m), the
+    # 20 N/m load more than undoes that (+0.16 m net; hand calculation: 2.347 -> 2.505 m).
+    assert no_ice < 0 < ice
+    assert ice == pytest.approx(0.16, abs=0.05)
+
+
+def test_state_change_round_trip():
+    # Going to another state and back gives the starting tension.
+    h1, w, ea, alpha = 18000.0, 16.3, 3.4e7, 23e-6
+    h2 = scenarios.state_change(h1, w, 15.0, w + 20.0, 0.0, 300.0, ea, alpha)
+    back = scenarios.state_change(h2, w + 20.0, 0.0, w, 15.0, 300.0, ea, alpha)
+    assert back == pytest.approx(h1, rel=1e-6)
+    assert h2 > h1  # ice raises the tension
 
 
 def test_blowout_swings_by_the_wind_angle(corridor):

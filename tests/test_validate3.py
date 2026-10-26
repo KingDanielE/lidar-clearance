@@ -6,7 +6,7 @@ from clearance.validate3 import Run, compare
 
 
 def test_compare_counts_hits_misses_and_false_alarms():
-    rules = Rules()  # violation < 3, urgent < 4.5, monitor < 6
+    rules = Rules(mvcd_m=3.0)  # violation < 3, urgent < 4.5, monitor < 6
     # Points 0-2 flagged in both; 3 only in truth (missed); 4 only predicted (false alarm,
     # e.g. a wire point Phase 1 called vegetation); 5 clear in both.
     truth = Run(np.array([0, 1, 2, 3, 5]), np.array([1.0, 4.0, 5.0, 2.0, 9.0]),

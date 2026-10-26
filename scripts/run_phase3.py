@@ -88,13 +88,15 @@ def plot_profile(points, labels, veg, worst, curves, rules, prefix, title):
     for t in reversed(encroach.TIERS):
         k = m & (tiers == t)
         ax.scatter(s[k], veg[k, 2], s=0.8 if t == encroach.CLEAR else 3, c=TIER_COLORS[t], linewidths=0, rasterized=True)
+    look = {scenarios.AS_SURVEYED: ("-", "black"), scenarios.MAX_SAG: ("--", "#dc2626"), scenarios.MAX_SAG_ICE: (":", "#7c3aed")}
     for c in curves:
-        if c.scenario in (scenarios.AS_SURVEYED, scenarios.MAX_SAG):
+        if c.scenario in look:
             s, _ = proj(c.xyz)
-            ls = "-" if c.scenario == scenarios.AS_SURVEYED else "--"
-            ax.plot(s, c.xyz[:, 2], ls=ls, lw=0.6, color="black" if ls == "-" else "#dc2626")
+            ls, col = look[c.scenario]
+            ax.plot(s, c.xyz[:, 2], ls=ls, lw=0.6, color=col)
     handles = [Line2D([], [], color="black", lw=1, label="conductor, as surveyed"),
-               Line2D([], [], color="#dc2626", lw=1, ls="--", label="conductor, max sag")]
+               Line2D([], [], color="#dc2626", lw=1, ls="--", label="conductor, hot (max sag)"),
+               Line2D([], [], color="#7c3aed", lw=1, ls=":", label="conductor, ice (0 C + load)")]
     handles += [Line2D([], [], marker="o", ls="", color=TIER_COLORS[t], label=f"vegetation: {t}") for t in encroach.TIERS]
     ax.legend(handles=handles, fontsize=7, loc="upper right")
     ax.set_xlabel("distance along line (m)")
@@ -153,7 +155,8 @@ def plot_section(veg, curves, at_xy, axis, prefix, title, rules):
     ax.scatter(o[m], veg[m, 2], s=3, c="#16a34a", linewidths=0, label="vegetation (+-2 m)")
     style = {
         scenarios.AS_SURVEYED: ("black", "o", "as surveyed"),
-        scenarios.MAX_SAG: ("#dc2626", "v", "max sag"),
+        scenarios.MAX_SAG: ("#dc2626", "v", "hot (max sag)"),
+        scenarios.MAX_SAG_ICE: ("#7c3aed", "v", "ice"),
         scenarios.BLOWOUT_LEFT: ("#2563eb", "<", "blowout"),
         scenarios.BLOWOUT_RIGHT: ("#2563eb", ">", None),
     }
@@ -164,11 +167,11 @@ def plot_section(veg, curves, at_xy, axis, prefix, title, rules):
             continue
         col, mk, lab = style[c.scenario]
         ax.plot(o[k], c.xyz[k, 2], marker=mk, color=col, ms=7, ls="")
-        circ = plt.Circle((o[k], c.xyz[k, 2]), rules.mvcd_m, color=col, fill=False, lw=0.5, ls=":")
+        circ = plt.Circle((o[k], c.xyz[k, 2]), rules.threshold(c.scenario), color=col, fill=False, lw=0.5, ls=":")
         ax.add_patch(circ)
     handles = [Line2D([], [], marker=s[1], ls="", color=s[0], label=s[2]) for s in style.values() if s[2]]
     handles.append(Line2D([], [], marker="o", ls="", color="#16a34a", label="vegetation (+-2 m)"))
-    handles.append(Line2D([], [], ls=":", color="gray", label=f"MVCD {rules.mvcd_m} m"))
+    handles.append(Line2D([], [], ls=":", color="gray", label=f"required: {rules.mvcd_m} m (sag, ice), {rules.mvcd_wind_m} m (wind)"))
     ax.legend(handles=handles, fontsize=8)
     ax.set_aspect("equal")
     ax.set_xlabel("offset across the line (m)")
@@ -200,7 +203,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("input", help="classified voxels LAS from Phase 1")
     ap.add_argument("--out", default="out")
-    ap.add_argument("--mvcd", type=float, default=encroach.Rules.mvcd_m)
+    ap.add_argument("--kv", type=float, default=encroach.Rules.kv, help="nominal voltage (LeV thresholds)")
+    ap.add_argument("--mvcd", type=float, default=None, help="override the sag threshold (m)")
     ap.add_argument("--t-survey", type=float, default=scenarios.LineParams.t_survey_c)
     ap.add_argument("--t-max", type=float, default=scenarios.LineParams.t_max_c)
     ap.add_argument("--wind-pa", type=float, default=scenarios.LineParams.wind_pressure_pa)
@@ -210,7 +214,7 @@ def main(argv=None):
     name = Path(args.input).stem.replace("_classified_voxels", "")
     prefix = str(out / name)
 
-    rules = encroach.Rules(mvcd_m=args.mvcd)
+    rules = encroach.Rules(kv=args.kv, mvcd_m=args.mvcd)
     line = scenarios.LineParams(t_survey_c=args.t_survey, t_max_c=args.t_max, wind_pressure_pa=args.wind_pa)
 
     cloud, labels = read_classified(args.input)
@@ -232,14 +236,16 @@ def main(argv=None):
 
     # Hazard trees: treetops of the (cleaned) vegetation.
     xy, h = hazard.tree_tops(veg, hag)
+    crown_r, base_xy = hazard.crowns(veg, hag, xy, h)
     all_wire = np.vstack([c.xyz for c in curves])
-    base_z, dist, margin, status = hazard.fall_in(xy, h, dtm, all_wire, rules.mvcd_m)
+    base_z, dist, margin, status = hazard.fall_in(xy, h, dtm, all_wire, rules.mvcd_wind_m, base_xy, crown_r)
     trees = {"xy": xy, "status": status}
     tree_rows = [
         {
             "tree": i + 1, "status": status[i],
             "x": round(float(xy[i, 0] + origin[0]), 2), "y": round(float(xy[i, 1] + origin[1]), 2),
             "base_z": round(float(base_z[i] + origin[2]), 2), "height_m": round(float(h[i]), 1),
+            "crown_radius_m": round(float(crown_r[i]), 1), "lean_m": round(float(np.linalg.norm(xy[i] - base_xy[i])), 1),
             "distance_to_conductor_m": round(float(dist[i]), 2), "margin_m": round(float(margin[i]), 2),
         }
         for i in np.argsort(margin) if status[i] != hazard.SAFE
@@ -274,6 +280,8 @@ def main(argv=None):
         "min_clearance_by_scenario_m": {s: round(float(d.min()), 2) for s, d in clr.dist.items()} if len(veg) else {},
         "min_clearance_by_span": per_span,
         "zones": [{k: v for k, v in z.items() if not k.startswith("_")} for z in zone_rows],
+        # Wire with no conductor model: vegetation beside it is not assessed.
+        "unmodelled_wire": encroach.unmodelled_wire(pts[labels == WIRE], curves, veg, rules, model.towers, origin),
         "hazard_trees": {"treetops_found": int(len(h)), "strike": int(np.sum(status == hazard.STRIKE)), "within_mvcd": int(np.sum(status == hazard.FLASHOVER)), "trees": tree_rows, "closest_to_reaching": closest_trees},
     }
 
@@ -283,7 +291,7 @@ def main(argv=None):
         _, _, _, tveg, thag, tclr, _, tidx = analyse(pts, labels, tv, rules, line, dtm, model=model)
         tz, _ = encroach.zones(tveg, tclr, rules, origin)
         txy, th = hazard.tree_tops(tveg, thag)
-        _, _, _, tstatus = hazard.fall_in(txy, th, dtm, all_wire, rules.mvcd_m)
+        _, _, _, tstatus = hazard.fall_in(txy, th, dtm, all_wire, rules.mvcd_wind_m, *hazard.crowns(tveg, thag, txy, th)[::-1])
         report["with_truth_vegetation"] = {
             "vegetation_points": int(tv.sum()),
             "points_by_tier": tier_counts(tclr, rules),
@@ -306,7 +314,7 @@ def main(argv=None):
             _, rcurves, _, rveg, rhag, rclr, _, ridx = analyse(pts, ref_labels, tv, rules, line, dtm, model=ref_model)
             rz, _ = encroach.zones(rveg, rclr, rules, origin)
             rxy, rh = hazard.tree_tops(rveg, rhag)
-            _, _, _, rstatus = hazard.fall_in(rxy, rh, dtm, np.vstack([c.xyz for c in rcurves]), rules.mvcd_m)
+            _, _, _, rstatus = hazard.fall_in(rxy, rh, dtm, np.vstack([c.xyz for c in rcurves]), rules.mvcd_wind_m, *hazard.crowns(rveg, rhag, rxy, rh)[::-1])
             report["reference"] = {
                 "conductors": len(ref_model.conductors),
                 "towers": len(ref_model.towers),
@@ -328,6 +336,9 @@ def main(argv=None):
     print(f"  hazard trees: {len(h)} treetops, {report['hazard_trees']['strike']} strike, {report['hazard_trees']['within_mvcd']} within MVCD")
     print("  trees closest to reaching a conductor:", [(t["height_m"], t["margin_m"]) for t in closest_trees])
     print("  min clearance by span:", {k: v["min_clearance_m"] for k, v in per_span.items()})
+    um = report["unmodelled_wire"]
+    print(f"  unmodelled wire: {len(um)} stretches, {sum(r['length_m'] for r in um):.0f} m, "
+          f"{sum(r['vegetation_within_monitor_m'] for r in um)} vegetation points nearby NOT ASSESSED")
     if "with_truth_vegetation" in report:
         print("  with truth vegetation:", report["with_truth_vegetation"])
         v = report["phase3_vs_truth"]
@@ -344,6 +355,10 @@ def main(argv=None):
         w.writeheader()
         w.writerows({k: v for k, v in z.items() if not k.startswith("_")} for z in zone_rows)
     write_geojson(out / f"{name}_encroachments.geojson", zone_rows, veg, origin)
+    with open(out / f"{name}_unmodelled_wire.csv", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(um[0]) if um else ["x"])
+        w.writeheader()
+        w.writerows(um)
     with open(out / f"{name}_hazard_trees.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(tree_rows[0]) if tree_rows else ["tree"])
         w.writeheader()

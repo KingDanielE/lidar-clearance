@@ -14,14 +14,14 @@ import numpy as np
 from clearance import pipeline
 from clearance.classes import MAPPINGS, NAMES, remap
 from clearance.evaluate import confusion, format_report, scores
-from clearance.io import read_las, write_las
+from clearance.io import read_many, write_las
 from clearance.plots import plot_all
 from clearance.synthetic import make_scene
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("input", nargs="?", help="LAS/LAZ file")
+    ap.add_argument("input", nargs="*", help="LAS/LAZ file; several neighbouring tiles are joined into one")
     ap.add_argument("--synthetic", action="store_true", help="use a generated corridor")
     ap.add_argument("--truth-field", help="LAS field with ground-truth labels")
     ap.add_argument("--truth-map", choices=sorted(MAPPINGS), default="asprs")
@@ -38,9 +38,9 @@ def main(argv=None):
         points, truth, _ = make_scene()
         origin, crs = np.zeros(3), None
     else:
-        name = Path(args.input).stem
-        print(f"reading {args.input}")
-        cloud = read_las(args.input, args.truth_field)
+        name = "+".join(Path(p).stem for p in args.input)
+        print(f"reading {', '.join(args.input)}")
+        cloud = read_many(args.input, args.truth_field)
         points, origin, crs = cloud.points, cloud.origin, cloud.crs
         truth = remap(cloud.labels, MAPPINGS[args.truth_map]) if cloud.labels is not None else None
         print(f"  read in {time.perf_counter() - t0:.1f} s")

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from scripts import run_phase1, run_phase2, run_phase3
 
-PHASE3_EXTRA = ("mvcd", "t_survey", "t_max", "wind_pa")
+PHASE3_EXTRA = ("kv", "mvcd", "t_survey", "t_max", "wind_pa")
 
 
 def _r(v, n=3):
@@ -84,11 +84,12 @@ def main(argv=None):
 
     rows = []
     for tile in args.tiles:
-        name = Path(tile).stem
+        parts = tile.split("+")  # "a.las+b.las": neighbouring tiles joined into one
+        name = "+".join(Path(p).stem for p in parts)
         out = Path(args.out) / name
         t0 = time.perf_counter()
         if not (args.skip_existing and (out / f"{name}_phase3.json").exists()):
-            p1 = [tile, "--out", str(out)]
+            p1 = parts + ["--out", str(out)]
             if args.truth_field:
                 p1 += ["--truth-field", args.truth_field, "--truth-map", args.truth_map]
             run_phase1.main(p1)

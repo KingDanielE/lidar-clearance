@@ -77,7 +77,9 @@ def _kinks(s: np.ndarray, z: np.ndarray, step: float = 1.0, window: float = 15.0
     for i in range(len(edges)):
         left = ok & (centre >= centre[i] - window) & (centre < centre[i])
         right = ok & (centre > centre[i]) & (centre <= centre[i] + window)
-        if left.sum() >= 5 and right.sum() >= 5:
+        # Both sides nearly full: a kink measured on a few metres at the end of the data
+        # (a tile edge) fired on a tree at wire height there.
+        if left.sum() >= 0.8 * window / step and right.sum() >= 0.8 * window / step:
             drop[i] = np.polyfit(centre[left], env[left], 1)[0] - np.polyfit(centre[right], env[right], 1)[0]
     return centre, drop
 

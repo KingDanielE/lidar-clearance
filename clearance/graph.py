@@ -177,7 +177,7 @@ def find_all_towers(points, labels, dirs, ok, wire_idx, merge_m: float = 8.0) ->
 def terminal_towers(
     points, labels, wire_idx, spans: list[Span], towers: list[Tower] | None = None,
     beyond: float = 15.0, radius: float = 10.0, min_ground: int = 20, min_steel: int = 30,
-    min_ray_m: float = 30.0, min_separation: float = 25.0,
+    min_ray_m: float = 30.0, min_separation: float = 25.0, max_scattering: float = 0.2,
 ) -> list[Tower]:
     """Towers where a line ends. A ray (partial span) that stops while the survey goes on
     (ground beyond its end) ends on a structure, if there is steel at wire height there.
@@ -205,11 +205,27 @@ def terminal_towers(
             continue
         lo, hi = end[:, 2].min(), end[:, 2].max()
         nb = np.asarray(otree.query_ball_point(s.b, 4.0), dtype=int)
-        if np.sum((other[nb, 2] > lo - 3.0) & (other[nb, 2] < hi + 3.0)) < min_steel:
+        nb = nb[(other[nb, 2] > lo - 3.0) & (other[nb, 2] < hi + 3.0)]
+        if len(nb) < min_steel:
+            continue
+        # Steel, not canopy: in forest, trees reach wire height where a line leaves the
+        # survey (t2z5), and Phase 1 labels tower steel vegetation anyway, so labels cannot
+        # tell them apart. Shape can: lattice scatters ~0.11, crowns ~0.28 (t1z6a).
+        if _median_scattering(other, nb) > max_scattering:
             continue
         xy = _steel_centre(s.b.copy(), end[:, 2], other, otree)
         out.append(Tower(len(out), xy, float(hi), len(end)))
     return out
+
+
+def _median_scattering(pts: np.ndarray, idx: np.ndarray, k: int = 16) -> float:
+    """Median l3/l1 of the neighbourhood covariance over pts[idx] (neighbours from pts)."""
+    tree = cKDTree(pts)
+    _, nn = tree.query(pts[idx], k=min(k, len(pts)), workers=-1)
+    nb = pts[nn].astype(np.float64)
+    nb -= nb.mean(axis=1, keepdims=True)
+    vals = np.linalg.eigvalsh(np.einsum("nki,nkj->nij", nb, nb))
+    return float(np.median(vals[:, 0] / np.maximum(vals[:, 2], 1e-12)))
 
 
 def build_line_graph(points, labels, wire_idx):
@@ -223,6 +239,13 @@ def build_line_graph(points, labels, wire_idx):
         towers = merge([towers, extra])
         spans = build_graph(points, wire_idx, towers, dirs, ok)
     return towers, spans
+
+
+def _span_cos(length: float, base_deg: float, arm: float = 20.0) -> float:
+    """Cosine of the largest angle a span's wires may make with the line between its tower
+    centres. Conductors hang from cross-arm ends up to ~10 m either side of a centre, so on
+    a 15 m span they run at ~50 degrees to it (t2z5 junction); on long spans `base_deg`."""
+    return math.cos(math.radians(max(base_deg, math.degrees(math.atan(arm / max(length, 1e-9))))))
 
 
 def _seg(xy, a, b, clamp: bool = True):
@@ -259,7 +282,7 @@ def build_graph(
                 continue
             u = (b - a) / L
             dist, s = _seg(wxy, a, b)
-            m = (dist <= lateral) & ok & (np.abs(dirs @ u) >= cos20) & (s > 4.0) & (s < L - 4.0)
+            m = (dist <= lateral) & ok & (np.abs(dirs @ u) >= _span_cos(L, 20.0)) & (s > 4.0) & (s < L - 4.0)
             nbins = max(1, int((L - 8.0) // bin_m))
             counts = np.histogram(s[m], bins=nbins, range=(4.0, L - 4.0))[0]
             if np.mean(counts >= 3) >= min_cover:
@@ -298,7 +321,7 @@ def build_graph(
         # Only points beside the edge, not past its towers: a span continuing almost
         # straight beyond a tower must not lose its first metres to this one.
         inside = (s >= -3.0) & (s <= L + 3.0)
-        okk = inside & (d <= lateral) & ((ok & (np.abs(dirs @ u) >= cos30)) | near_tower) & (d < best)
+        okk = inside & (d <= lateral) & ((ok & (np.abs(dirs @ u) >= _span_cos(L, 30.0))) | near_tower) & (d < best)
         best[okk] = d[okk]
         owner[okk] = e
     spans = [Span(e, T[i], T[j], towers[i].id, towers[j].id, np.nonzero(owner == e)[0]) for e, (i, j) in enumerate(kept)]
