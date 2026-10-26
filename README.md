@@ -10,18 +10,30 @@ a strong wind? This pipeline answers that from a raw LiDAR point cloud, in three
   encroachment zones; hazard (fall-in) trees.
 
 Plain Python (NumPy, SciPy, laspy), rule-based and physics-based, no trained model. Checked
-against hand-labelled drone LiDAR of a high-voltage line in the Alps
-([GridNet-HD](#data-and-credit)), on a tile used for tuning and a held-out one.
+against hand-labelled drone LiDAR of high-voltage lines ([GridNet-HD](#data-and-credit)):
+two alpine tiles and a forest tile with trees growing into the line.
 
 ## Results at a glance
 
-On the held-out tile (t5b6, 36 M points, parameters not tuned on it):
+Every number is scored against the dataset's hand labels. Phase 3 is scored by running it
+twice on the same conductor model, once with predicted and once with hand-labelled
+vegetation, and comparing point by point.
 
-| Phase | Result |
-|---|---|
-| 1. Classification | wire recall 97% (IoU 0.79), pylon IoU 0.87, ground IoU 0.97 |
-| 2. Conductor model | 21 of 21 conductors found; fit RMSE 3.0-5.5 cm; within 3.8 cm of a fit to the hand labels |
-| 3. Clearance | closest vegetation 9.87 m as surveyed, 8.05 m at max sag; same as with the hand labels |
+| | t5b6: alpine, held out | t1z6a: forest |
+|---|---|---|
+| Points | 36 M | 50 M |
+| 1. Wires found (recall / IoU) | 97% / 0.79 | 99% / 0.69 |
+| 2. Conductors found | 21 of 21 | 20 of 20 |
+| 2. Fit RMSE / distance to a fit on the hand labels | 3-5.5 cm / max 3.8 cm | 3-4 cm / max 0.6 cm |
+| 3. Closest vegetation (as surveyed / max sag) | 9.9 / 8.1 m, same as hand labels | 1.2 / 0.3 m, same as hand labels |
+| 3. Encroachment zones found | none exist | **43 of 43, all in the right tier, no false ones** |
+| 3. Flagged vegetation points (precision / recall) | - | 99.7% / 99.8% |
+| 3. Hazard trees (precision / recall) | none exist | 95% / 100% (63 flagged, 60 real) |
+
+t5b6 was not used for tuning. t1z6a was the tile that exposed the forest problems (towers
+fused with the canopy, conductors bridged by stray points, tower steel labelled as
+vegetation), so its numbers are after fixes made on it; a second forest tile is the next
+honest check. Details per phase below.
 
 **Phase 1**: predicted classes (top) against the hand labels (bottom), along the line.
 
@@ -32,16 +44,17 @@ circuit (2 x 3 phases) plus an earth wire.
 
 ![Phase 2: fitted catenaries per span](docs/phase2_spans_t5b6.png)
 
-**Phase 3**: clearance on a synthetic corridor with known trees (the real line is clear).
-The tall tree near mid-span violates the 3 m clearance once the conductor sags at 80 C
-(dashed red); the next one is on the watch list.
+**Phase 3**: the forest line climbing a hillside. Vegetation coloured by its worst
+clearance (as surveyed, at 80 C max sag, or swung by wind): red is inside the 3 m minimum,
+orange within 4.5 m, yellow on the watch list.
 
-![Phase 3: vegetation clearance along a synthetic corridor](docs/phase3_profile_synthetic.png)
+![Phase 3: vegetation clearance along the forest line](docs/phase3_profile_t1z6a.png)
 
-Cross-section of the real line at mid-span: each conductor as surveyed (black), at max sag
-(red) and swung by wind (blue), with the 3 m clearance circles.
+Cross-section at the worst zone: each conductor as surveyed (black), at max sag (red) and
+swung by wind (blue), with 3 m clearance circles. The tree uphill of the line has grown
+into the clearance of the right-hand conductor (0.34 m at max sag).
 
-![Phase 3: cross-section with sag and blowout positions](docs/phase3_section_t5b6.png)
+![Phase 3: cross-section at the worst encroachment](docs/phase3_section_t1z6a.png)
 
 ## Run
 
@@ -51,33 +64,37 @@ uv pip install --python .venv -r requirements.txt
 .venv/Scripts/python -m pytest   # Windows path; bin/ on macOS/Linux
 ```
 
-Get the two GridNet-HD tiles (1.2 and 1.4 GB, see [Data and credit](#data-and-credit)):
+Get the GridNet-HD tiles used here (1.2, 1.4 and 1.9 GB; see [Data and credit](#data-and-credit)).
+Large downloads from Hugging Face sometimes drop; `-C -` resumes them.
 
 ```bash
 mkdir -p data
-curl -L -o data/t5c2.las https://huggingface.co/datasets/heig-vd-geo/GridNet-HD/resolve/main/t5c2/lidar/t5c2.las
-curl -L -o data/t5b6.las https://huggingface.co/datasets/heig-vd-geo/GridNet-HD/resolve/main/t5b6/lidar/t5b6.las
+for z in t5c2 t5b6 t1z6a; do curl -L -C - -o data/$z.las https://huggingface.co/datasets/heig-vd-geo/GridNet-HD/resolve/main/$z/lidar/$z.las; done
 ```
 
-Run the three phases on a tile (or `run_phase1 --synthetic` for the generated corridor):
+Run all three phases on one or more tiles, with a summary row per tile in
+`out/batch_summary.md` (or `run_phase1 --synthetic` for the generated corridor):
 
 ```bash
-.venv/Scripts/python -m scripts.run_phase1 data/t5c2.las --truth-field ground_truth --truth-map gridnet --out out/t5c2
-.venv/Scripts/python -m scripts.run_phase2 out/t5c2/t5c2_classified_voxels.las --out out/t5c2
-.venv/Scripts/python -m scripts.run_phase3 out/t5c2/t5c2_classified_voxels.las --out out/t5c2 [--mvcd 3 --t-max 80 --wind-pa 300]
+.venv/Scripts/python -m scripts.run_batch data/t5c2.las data/t5b6.las data/t1z6a.las --truth-field ground_truth --truth-map gridnet [--mvcd 3 --t-max 80 --wind-pa 300]
 ```
 
-Phase 1 writes `<name>_report.md/.json` (scores + confusion matrix), `<name>_plan.png`,
-`<name>_profile.png` (predicted vs truth along the line), `<name>_3d.png`, and
-`<name>_classified_voxels.las` (open in CloudCompare), which Phases 2 and 3 read.
+Each phase also runs on its own: `scripts.run_phase1 <tile.las>`, then `run_phase2` and
+`run_phase3` on the `<name>_classified_voxels.las` that Phase 1 writes. Phase 1 also writes
+`<name>_report.md/.json` (scores + confusion matrix) and plan, profile and 3D plots.
+
+To find zones worth downloading, `scripts.screen_zones --remote <zone> ...` reads ~2% of
+each zone's file by HTTP byte range (about 40 MB instead of 2 GB) and reports how close
+hand-labelled vegetation comes to the wires (see [Finding a zone](#finding-a-zone-with-trees-near-the-line)).
 
 ## Data and credit
 
 The LiDAR data is [GridNet-HD](https://huggingface.co/datasets/heig-vd-geo/GridNet-HD)
 (HEIG-VD), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): UAV LiDAR
 and imagery of high-voltage lines with per-point labels. This project uses zones t5c2
-(30.6 M points, 268 x 581 m, 236 m relief) and t5b6 (36.1 M points, 328 x 747 x 223 m). The
-data is not included in this repository, and the plots in `docs/` are derived from it.
+(30.6 M points, 268 x 581 m, 236 m relief), t5b6 (36.1 M points, 328 x 747 x 223 m) and t1z6a
+(50.3 M points, 213 x 610 x 91 m, forest). The data is not included in this repository, and
+the plots in `docs/` are derived from it.
 
 > Antoine Carreaud, Shanci Li, Malo De Lacour, Digre Frinde, Jan Skaloud, Adrien Gressin.
 > *GridNet-HD: A High-Resolution Multi-Modal Dataset for LiDAR-Image Fusion on Power Line
@@ -138,6 +155,26 @@ while tuning. Same parameters:
 - Phase 2 absorbs the wire false positives (see below), so the geometry is unaffected. For a
   Phase 1 fix: size `pylon_radius` from each tower's own footprint instead of a constant.
 
+### Forest: t1z6a (thresholds unchanged)
+
+| class | precision | recall | IoU |
+|---|---:|---:|---:|
+| ground | 0.949 | 0.887 | 0.847 |
+| vegetation | 0.880 | 0.950 | 0.842 |
+| building | 0.619 | 0.453 | 0.354 |
+| pylon | - | 0.000 | 0.000 |
+| wire | 0.689 | 0.992 | 0.685 |
+
+- **No pylons found.** Each tower stands in trees as tall as it is (vegetation 95th
+  percentile 21.5 m, towers 22 m), so on the 1 m connectivity grid a tower and hundreds of
+  metres of canopy form one cluster (2.6-3.1 M points) that scatters like forest (0.28-0.31,
+  vs 0.11 for tower steel). Tower points become vegetation (270k) or wire (97k).
+  A per-point scattering filter before clustering was tried and rejected: it broke the
+  alpine towers (recall 0.95 -> 0.69) and let tree fragments pass as towers here.
+  Phase 2 finds these towers from the wires instead (below), so the clearance answer does
+  not depend on Phase 1 getting them.
+- Wires: 99% recall; the false wires are mostly that tower steel.
+
 Caveats:
 - t5c2 numbers are tuned-on-the-data; t5b6 is the honest estimate.
 - Vegetation here is tiny (0.7% of points, mostly shrubs under 1 m), so its precision is
@@ -149,7 +186,18 @@ Caveats:
 ## Phase 2: conductor model (`clearance/spans.py`, `clearance/catenary.py`)
 
 1. **Towers**: connected clusters of pylon points (>= 200 voxels); pieces within 10 m of
-   each other are one tower. Centre = median xy.
+   each other are one tower. Centre = median xy. Plus towers found **from the wires**
+   (`spans.towers_from_wires`), which catches towers Phase 1 missed (forest):
+   - the conductors' upper envelope (90th percentile of wire z per 1 m along the line)
+     kinks downwards at a tower: the slope over 15 m before minus the slope over 15 m after
+     is > 0.03, where a catenary alone gives a negative value;
+   - and the line's centre column (2.5 m radius), between the lowest conductor - 3 m and the
+     top wire - 1 m, holds >= 300 points that are neither ground nor wire. At mid-span that
+     column is open air (vegetation must stay below the conductors); a tower body fills it.
+     The column is slid +-8 m along the line to centre on the body.
+   Kinks alone fire at tile edges and where the envelope switches conductor; on the three
+   tiles, true towers had 2,300-7,300 centre-column points, false kinks 0-59.
+   Wire-found towers within 20 m of a pylon-cluster tower are dropped as duplicates.
 2. **Spans**: a route through the tower centres, ordered along the line, extended past the
    end towers to where the wire points stop (tiles cut spans off). Each wire point goes to
    the nearest route segment in plan view. Spans between two towers are *full*, the rest
@@ -168,26 +216,31 @@ Caveats:
 5. **Validation**: a cluster is rejected (listed with the reason in the report) if it has
    < 100 points, is < 10 m long, covers < 50% of its extent, has c at a fit bound, a
    vertical RMSE > 25 cm (real conductors fit to ~5 cm), or did not converge. This is what
-   removes the clusters made of Phase 1's false wire points.
+   removes the clusters made of Phase 1's false wire points. A large cluster rejected for
+   RMSE is first re-clustered at half the radius (down to 0.125 m) and the pieces refitted:
+   in the forest tile, stray tower points bridged two conductors into one 6,671-point
+   cluster with a 2.65 m RMSE.
 6. Outputs: `<name>_phase2.json`, `<name>_conductors.csv`, `<name>_conductor_model.las`
    (every conductor sampled at 0.25 m, the input for Phase 3), `<name>_spans.png`
    (points + fitted curves per span), `<name>_route.png` (plan).
 
 ### Results
 
-Both tiles: 2 towers, 3 spans (one full span, two cut off by the tile edge), 7 conductors in
-every span: a double circuit (2 x 3 phases) plus an earth wire.
+Alpine tiles: 2 towers, 3 spans (one full span, two cut off by the tile edge), 7 conductors
+in every span: a double circuit (2 x 3 phases) plus an earth wire. Forest tile: 3 towers
+(all found from the wires), 4 spans (two full), 5 conductors in every span.
 
-| | t5c2 | t5b6 (held out) |
-|---|---|---|
-| full span length | 191 m | 239 m |
-| sag (full span) | 4.05-4.31 m | 6.12-7.36 m |
-| c (full span) | 1084-1155 m | 987-1184 m |
-| vertical RMSE, all conductors | 2.8-5.0 cm | 3.0-5.5 cm |
-| lowest ground clearance | 10.5 m | 10.8 m |
-| clusters rejected | 1 (18 pts) | 17 (Phase 1 false wires) |
-| conductors matching the truth-label model | 21 / 21 | 21 / 21 |
-| max height difference to the truth-label model | 1.7 cm | 3.8 cm |
+| | t5c2 | t5b6 (held out) | t1z6a (forest) |
+|---|---|---|---|
+| full span length | 191 m | 239 m | 156 m, 236 m |
+| vertical RMSE, all conductors | 2.8-5.0 cm | 3.0-5.5 cm | 2.9-4.1 cm |
+| lowest ground clearance | 10.5 m | 10.8 m | |
+| conductors per span (hand labels) | 7/7/7 (7/7/7) | 7/7/7 (7/7/7) | 5/5/5/5 (5/5/5/5) |
+| conductors matching the truth-label model | 21 / 21 | 21 / 21 | 20 / 20 |
+| max height difference to the truth-label model | 1.7 cm | 3.8 cm | 0.6 cm |
+
+Without the wire-found towers, the forest tile gave 0 towers, one 600 m "span" and no
+usable conductor; without the re-clustering, 18 of its 20 conductors.
 
 **Classification errors barely move the geometry**: even on t5b6, where 20% of predicted
 wire points are wrong, every conductor fitted from predicted points is within 3.8 cm of the
@@ -196,8 +249,9 @@ one fitted from hand-labelled points. On partial spans c itself can differ by a 
 still agrees to centimetres.
 
 Note: the tower margin, residual trim and validation rules were added after the first
-t5b6 run showed tower hardware and false wires spoiling fits, so Phase 2's t5b6 numbers are
-no longer strictly held out. Phase 1's t5b6 numbers are.
+t5b6 run showed tower hardware and false wires spoiling fits, and the wire-found towers and
+re-clustering after the first t1z6a run, so Phase 2 numbers on those tiles are no longer
+strictly held out. Phase 1's t5b6 and t1z6a numbers are (Phase 1 was not changed).
 
 Synthetic check (tests): c = 900 m and sag 2.35 m are recovered within 3% and 5 cm.
 
@@ -225,6 +279,11 @@ Synthetic check (tests): c = 900 m and sag 2.35 m are recovered within 3% and 5 
    - Partial spans: the far attachment is extrapolated along the fitted curve at the
      median full-span length, so their sag and blowout positions are flagged `estimated`.
 2. **Vegetation cleaning** (Phase 1 errors would otherwise become false alarms):
+   - *near towers*: vegetation-labelled points within 8 m (in plan) of a tower centre.
+     In the forest tile, the only 3 false zones were hand-labelled tower steel 3-6 m from a
+     tower centre, at the conductor attachments (every real zone was >= 30 m from a tower).
+     The cost: a tree inside a tower footprint is not reported; tower surroundings need
+     their own check.
    - *floating fragments*: vegetation clusters (1 m connectivity) with < 200 points and
      nothing below 3 m above ground. Plants grow from the ground; on both real tiles every
      false zone they caused was hand-labelled conductor.
@@ -252,20 +311,32 @@ conductor. Set them from the utility's standard and the line's design data.
 
 ### Results
 
-| | synthetic | t5c2 | t5b6 |
-|---|---|---|---|
-| min clearance as surveyed / max sag / blowout | 1.57 / 0.32 / 1.59 m | 9.26 / 7.64 / 9.31 m | 9.87 / 8.05 / 10.10 m |
-| same, hand-labelled vegetation | 1.57 / 0.32 / 1.59 m | 12.07 / 11.00 / 12.33 m | 9.87 / 8.05 / 10.10 m |
-| zones (violation / urgent / monitor) | 1 / 0 / 1 | 0 | 0 |
-| hazard trees (strike / within MVCD) | 0 / 1 | 0 / 0 | 0 / 0 |
-| closest tree to reaching a conductor | | 14.6 m short | 7.9 m short |
-| vegetation points dropped (floating / on conductor) | 0 / 1 | 130 / 0 | 355 / 0 |
+Scoring (`clearance/validate3.py`): Phase 3 runs twice on the same voxels and conductor
+model, with predicted and with hand-labelled vegetation. Flagged points are compared by
+index; a predicted zone matches a hand-label zone if they share a point; hazard trees match
+within 2 m in plan.
 
+| | synthetic | t5c2 | t5b6 | t1z6a (forest) |
+|---|---|---|---|---|
+| min clearance as surveyed / max sag / blowout | 1.57 / 0.32 / 1.59 m | 9.26 / 7.64 / 9.31 m | 9.87 / 8.05 / 10.10 m | 1.19 / 0.34 / 0.88 m |
+| same, hand-labelled vegetation | 1.57 / 0.32 / 1.59 m | 12.07 / 11.00 / 12.33 m | 9.87 / 8.05 / 10.10 m | 1.19 / 0.34 / 0.88 m |
+| zones (violation / urgent / monitor) | 1 / 0 / 1 | 0 | 0 | 9 / 10 / 24 |
+| same, hand-labelled vegetation | 1 / 0 / 1 | 0 | 0 | 9 / 10 / 24 |
+| zones found / false / same tier | 2 / 0 / 2 | | | **43 / 0 / 43** |
+| flagged points precision / recall | 1.0 / 1.0 | | | 0.997 / 0.998 |
+| hazard trees strike + within MVCD (hand labels) | 1 (1) | 0 (0) | 0 (0) | 63 (60) |
+| hazard trees precision / recall | 1.0 / 1.0 | | | 0.95 / 1.0 |
+
+- Forest (t1z6a): 43 encroachment zones on the hand-labelled vegetation, all 43 found from
+  the predicted vegetation, each in the same tier, clearance within 0.43 m; no false zones.
+  Max sag is the worst case for 28 zones, blowout for 15 (14 of them to the same side).
+  The first run had 46 zones (3 false: tower steel at the attachments, fixed by the tower
+  exclusion) and no conductors at all before Phase 2 learned to find towers from the wires.
 - Synthetic: the 22 m tree planted 4 m off the line is a violation at max sag (0.32 m;
   1.57 m as surveyed), the 19 m tree is on the watch list (4.56 m, ~1.6 years at 1 m/yr).
   Tests check the hot-wire sag against the parabolic formula, the blowout swing against
   `s sin(theta)`, and the fall-in rule.
-- Real tiles: the line is well clear (closest vegetation 8 m at max sag). Before the
+- Alpine tiles: the line is well clear (closest vegetation 8 m at max sag). Before the
   vegetation cleaning, t5c2 showed 3 zones and t5b6 8 zones plus 10 "strike" trees. Every
   zone was hand-labelled conductor points that Phase 1 called vegetation; the "trees" were
   20-43 m tall peaks at wire height, most within 10 m of a tower. After cleaning, the
@@ -276,11 +347,35 @@ conductor. Set them from the utility's standard and the line's design data.
 
 ### Limits
 
-- No real encroachment exists in these two tiles, so the zone and hazard logic is verified
-  on the synthetic scene and by tests only. A tile with trees under the line is the next
-  check.
+- Real encroachments are validated on one forest tile, and three fixes were made on it
+  (wire-found towers, re-clustering, tower exclusion). A second forest tile (t1z6b, t1z8
+  or t2z5, all screened with vegetation within 2.5-3.3 m of a wire) is the next honest check.
+- The score compares predicted with hand-labelled vegetation through the same conductor
+  model, so it measures the effect of classification errors, not the accuracy of the
+  conductor model or of the sag and wind assumptions.
 - One survey temperature for the whole flight; no conductor creep; no ice load.
 - Clearance is to the conductor centreline (`conductor_radius_m` = 0; set the bundle radius).
+
+## Finding a zone with trees near the line
+
+The first two tiles had no vegetation near the line, so Phase 3 could not be checked on real
+encroachments. `scripts/screen_zones.py` finds candidate zones without downloading them:
+`clearance/sample.py` reads the LAS header and then ~2% of the points as 2,000 evenly spaced
+chunks, by HTTP byte range, and measures how close hand-labelled vegetation comes to
+hand-labelled wire.
+
+- Chunk count matters more than sample size: points are not stored in a spatially uniform
+  order, so 300 chunks put t5b6's closest vegetation at 19.7 m, 2,000-3,000 chunks at
+  8.9-9.2 m (full file: 8.4 m).
+- Only the 27 train/validation zones carry labels (test-zone labels are withheld). 16 were
+  screened (about 40 MB and 2.5-6 minutes each). Vegetation within 5 m of a wire:
+
+| zone | closest (sample) | | zone | closest (sample) |
+|---|---:|---|---|---:|
+| t1z6a | 1.7 m | | t4z1 | 3.7 m |
+| t1z6b | 2.5 m | | t1z5b | 4.2 m |
+| t1z8 | 3.0 m | | t6z2, t6z3 | 5.3 m |
+| t2z5 | 3.3 m | | t5a4, t5b1, t3*, t6z4, t6z6 | 8-52 m |
 
 ## Licence
 

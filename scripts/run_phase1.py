@@ -19,7 +19,7 @@ from clearance.plots import plot_all
 from clearance.synthetic import make_scene
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("input", nargs="?", help="LAS/LAZ file")
     ap.add_argument("--synthetic", action="store_true", help="use a generated corridor")
@@ -27,7 +27,7 @@ def main():
     ap.add_argument("--truth-map", choices=sorted(MAPPINGS), default="asprs")
     ap.add_argument("--voxel", type=float, default=0.15)
     ap.add_argument("--out", default="out")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

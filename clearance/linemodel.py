@@ -6,7 +6,7 @@ import numpy as np
 
 from .catenary import Conductor, fit_spans
 from .classes import GROUND
-from .spans import Span, Tower, build_spans, find_towers
+from .spans import Span, Tower, build_spans, find_towers, merge_towers, towers_from_wires
 
 
 @dataclass
@@ -18,7 +18,8 @@ class LineModel:
 
 
 def build(points: np.ndarray, labels: np.ndarray, wire_mask: np.ndarray) -> LineModel:
-    towers = find_towers(points, labels)
+    # Pylon clusters first; the wire geometry adds towers they missed (towers in forest).
+    towers = merge_towers(find_towers(points, labels), towers_from_wires(points, labels))
     wire_idx = np.nonzero(wire_mask)[0]
     spans = build_spans(points[wire_idx, :2], towers)
     ground = points[labels == GROUND]

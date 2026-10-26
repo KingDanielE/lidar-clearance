@@ -32,7 +32,7 @@ class Params:
     wire_grow_radius: float = 0.3
     wire_grow_linearity: float = 0.5
     pylon_min_height: float = 10.0
-    # Lattice towers scatter less than tree crowns (~0.12 vs ~0.17 on GridNet-HD).
+    # Lattice towers scatter less than tree crowns (~0.11-0.12 vs 0.17-0.3 on GridNet-HD).
     pylon_max_scattering: float = 0.14
     pylon_wire_distance: float = 3.0
     pylon_radius: float = 15.0  # cross-arm half-width; farther points are not the tower

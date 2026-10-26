@@ -21,7 +21,7 @@ import numpy as np  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from scipy.spatial import ConvexHull  # noqa: E402
 
-from clearance import encroach, hazard, linemodel, scenarios  # noqa: E402
+from clearance import encroach, hazard, linemodel, scenarios, validate3  # noqa: E402
 from clearance.classes import GROUND, PYLON, VEGETATION, WIRE  # noqa: E402
 from clearance.ground import height_above_ground, pmf_dtm  # noqa: E402
 from clearance.io import read_classified, write_las  # noqa: E402
@@ -39,21 +39,26 @@ def analyse(points, labels, veg_mask, rules, line, dtm, model=None):
     """Everything Phase 3 computes, for one vegetation mask.
 
     Returns (model, curves, assumed span, vegetation points, their HAG, clearance,
-    {reason: points dropped}).
+    {reason: points dropped}, indices of the vegetation points into `points`).
     """
     model = model or linemodel.build(points, labels, labels == WIRE)
     curves, assumed = scenarios.curves(model.conductors, model.spans, line)
-    veg = points[veg_mask]
+    idx = np.nonzero(veg_mask)[0]
+    near_tower = np.zeros(len(idx), dtype=bool)
+    for t in model.towers:
+        near_tower |= np.linalg.norm(points[idx, :2] - t.xy, axis=1) < rules.tower_exclusion_m
+    idx = idx[~near_tower]
+    veg = points[idx]
     hag = height_above_ground(veg, dtm)
     fl = encroach.floating(veg, hag)
-    veg, hag = veg[~fl], hag[~fl]
+    veg, hag, idx = veg[~fl], hag[~fl], idx[~fl]
     clr = encroach.compute(veg, curves, rules)
     frag = encroach.wire_fragments(veg, clr)
     if frag.any():
-        veg, hag = veg[~frag], hag[~frag]
+        veg, hag, idx = veg[~frag], hag[~frag], idx[~frag]
         clr = encroach.compute(veg, curves, rules)
-    dropped = {"floating_fragments": int(fl.sum()), "on_conductor": int(frag.sum())}
-    return model, curves, assumed, veg, hag, clr, dropped
+    dropped = {"near_towers": int(near_tower.sum()), "floating_fragments": int(fl.sum()), "on_conductor": int(frag.sum())}
+    return model, curves, assumed, veg, hag, clr, dropped, idx
 
 
 def tier_counts(clr, rules):
@@ -191,7 +196,7 @@ def write_geojson(path, zones, veg, origin):
     Path(path).write_text(json.dumps({"type": "FeatureCollection", "features": feats}, indent=1))
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("input", help="classified voxels LAS from Phase 1")
     ap.add_argument("--out", default="out")
@@ -199,7 +204,7 @@ def main():
     ap.add_argument("--t-survey", type=float, default=scenarios.LineParams.t_survey_c)
     ap.add_argument("--t-max", type=float, default=scenarios.LineParams.t_max_c)
     ap.add_argument("--wind-pa", type=float, default=scenarios.LineParams.wind_pressure_pa)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     name = Path(args.input).stem.replace("_classified_voxels", "")
@@ -212,7 +217,14 @@ def main():
     pts, origin = cloud.points, cloud.origin
     veg_mask = labels == VEGETATION
     dtm = pmf_dtm(pts[labels == GROUND])
-    model, curves, assumed, veg, hag, clr, dropped = analyse(pts, labels, veg_mask, rules, line, dtm)
+    model = linemodel.build(pts, labels, labels == WIRE)
+    if not model.conductors:
+        # Nothing to measure clearance to; say so instead of reporting a clear line.
+        report = {"tile": name, "conductors": 0, "error": "no conductor model (Phase 2 fitted no conductors)"}
+        (out / f"{name}_phase3.json").write_text(json.dumps(report, indent=2))
+        print(f"{name}: no conductors, Phase 3 skipped")
+        return
+    model, curves, assumed, veg, hag, clr, dropped, veg_idx = analyse(pts, labels, veg_mask, rules, line, dtm, model=model)
     worst, worst_s = clr.worst()
     zone_rows, _ = encroach.zones(veg, clr, rules, origin)
     for z in zone_rows:
@@ -264,14 +276,23 @@ def main():
     if cloud.labels is not None:
         # Same conductor model, hand-labelled vegetation: how much do Phase 1 errors matter?
         tv = cloud.labels == VEGETATION
-        _, _, _, tveg, _, tclr, _ = analyse(pts, labels, tv, rules, line, dtm, model=model)
+        _, _, _, tveg, thag, tclr, _, tidx = analyse(pts, labels, tv, rules, line, dtm, model=model)
         tz, _ = encroach.zones(tveg, tclr, rules, origin)
+        txy, th = hazard.tree_tops(tveg, thag)
+        _, _, _, tstatus = hazard.fall_in(txy, th, dtm, all_wire, rules.mvcd_m)
         report["with_truth_vegetation"] = {
             "vegetation_points": int(tv.sum()),
             "points_by_tier": tier_counts(tclr, rules),
             "min_clearance_by_scenario_m": {s: round(float(d.min()), 2) for s, d in tclr.dist.items()} if tv.any() else {},
             "zones_by_tier": {t: sum(z["tier"] == t for z in tz) for t in encroach.TIERS[:3]},
+            "hazard_strike": int(np.sum(tstatus == hazard.STRIKE)),
+            "hazard_within_mvcd": int(np.sum(tstatus == hazard.FLASHOVER)),
         }
+        report["phase3_vs_truth"] = validate3.compare(
+            validate3.Run(veg_idx, worst, zone_rows, xy, status),
+            validate3.Run(tidx, tclr.worst()[0], tz, txy, tstatus),
+            rules,
+        )
 
     print(f"{name}: {len(model.conductors)} conductors, {len(veg):,} vegetation points (dropped: {dropped}), swing {math.degrees(line.swing_rad):.1f} deg")
     print("  min clearance by scenario:", report["min_clearance_by_scenario_m"])
@@ -284,6 +305,8 @@ def main():
     print("  min clearance by span:", {k: v["min_clearance_m"] for k, v in per_span.items()})
     if "with_truth_vegetation" in report:
         print("  with truth vegetation:", report["with_truth_vegetation"])
+        v = report["phase3_vs_truth"]
+        print("  vs truth: flagged points", v["flagged_points"], "| zones", v["zones"], "| hazard trees", v["hazard_trees"])
 
     (out / f"{name}_phase3.json").write_text(json.dumps(report, indent=2, default=str))
     cols = [k for k in (zone_rows[0] if zone_rows else {}) if not k.startswith("_")]

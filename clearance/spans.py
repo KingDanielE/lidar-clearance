@@ -62,6 +62,87 @@ def find_towers(points, labels, min_points=200, merge_distance=10.0) -> list[Tow
     ]
 
 
+def _kinks(s: np.ndarray, z: np.ndarray, step: float = 1.0, window: float = 15.0):
+    """Bin centres and the slope drop across each (left slope - right slope) of the wires'
+    upper envelope. Catenaries curve upwards (negative drop); a tower is a sharp positive one.
+    """
+    edges = np.arange(s.min(), s.max() + step, step)
+    b = np.clip(np.digitize(s, edges) - 1, 0, len(edges) - 1)
+    centre = edges + step / 2
+    env = np.full(len(edges), np.nan)
+    for i in np.unique(b):
+        env[i] = np.percentile(z[b == i], 90)
+    ok = ~np.isnan(env)
+    drop = np.full(len(edges), np.nan)
+    for i in range(len(edges)):
+        left = ok & (centre >= centre[i] - window) & (centre < centre[i])
+        right = ok & (centre > centre[i]) & (centre <= centre[i] + window)
+        if left.sum() >= 5 and right.sum() >= 5:
+            drop[i] = np.polyfit(centre[left], env[left], 1)[0] - np.polyfit(centre[right], env[right], 1)[0]
+    return centre, drop
+
+
+def towers_from_wires(
+    points, labels, min_kink: float = 0.03, min_steel: int = 300, column_r: float = 2.5,
+    slide: float = 8.0, separation: float = 50.0,
+) -> list[Tower]:
+    """Towers the pylon classification missed (in forest a tower is fused with the canopy).
+
+    A tower is where (1) the conductors' upper envelope kinks downwards, and (2) the line's
+    centre column, between the lowest conductor and the top wire, holds structure that is
+    neither ground nor wire. At mid-span that column is open air: vegetation must stay below
+    the conductors. The column is slid along the line to find the tower body exactly.
+    """
+    from scipy.spatial import cKDTree
+
+    from .classes import GROUND, WIRE
+
+    w = points[labels == WIRE]
+    other = points[(labels != WIRE) & (labels != GROUND)]
+    if len(w) < 200 or len(other) == 0:
+        return []
+    axis = _xy_axis(w[:, :2])[0]
+    c0 = w[:, :2].mean(axis=0)
+    s = (w[:, :2] - c0) @ axis
+    centre, drop = _kinks(s, w[:, 2])
+    tree = cKDTree(other[:, :2])
+
+    def column(sk):
+        m = np.abs(s - sk) < 3.0
+        if m.sum() < 10:
+            return 0, None
+        xy = np.median(w[m, :2], axis=0)
+        lo, hi = np.percentile(w[m, 2], [5, 95])
+        nb = np.asarray(tree.query_ball_point(xy, column_r), dtype=int)
+        zz = other[nb, 2]
+        return int(np.sum((zz > lo - 3.0) & (zz < hi - 1.0))), xy
+
+    found = []
+    for i in np.argsort(-np.nan_to_num(drop, nan=-1.0)):
+        if not drop[i] > min_kink:
+            break
+        if any(abs(centre[i] - f[0]) < separation for f in found):
+            continue
+        best = max((column(centre[i] + d) + (centre[i] + d,) for d in np.arange(-slide, slide + 1, 1.0)), key=lambda r: r[0])
+        n, xy, sk = best
+        if n >= min_steel:
+            found.append((sk, xy, n))
+    out = []
+    for k, (_, xy, n) in enumerate(found):
+        nb = np.asarray(tree.query_ball_point(xy, 6.0), dtype=int)
+        out.append(Tower(k, xy, float(other[nb, 2].max()), n))
+    return out
+
+
+def merge_towers(primary: list[Tower], extra: list[Tower], distance: float = 20.0) -> list[Tower]:
+    """Primary towers plus any extra tower not within `distance` of one; ids renumbered."""
+    keep = list(primary)
+    for t in extra:
+        if all(np.linalg.norm(t.xy - p.xy) > distance for p in keep):
+            keep.append(t)
+    return [Tower(i, t.xy, t.top_z, t.n_points) for i, t in enumerate(keep)]
+
+
 def _seg_distance(xy, a, b):
     d = b - a
     t = np.clip(((xy - a) @ d) / max(d @ d, 1e-9), 0.0, 1.0)

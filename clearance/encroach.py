@@ -23,6 +23,10 @@ class Rules:
     cycle_years: float = 3.0  # inspection / trimming cycle
     conductor_radius_m: float = 0.0  # bundle radius; distances are to the modelled centre
     min_zone_points: int = 5
+    # Vegetation-labelled points this close (in plan) to a tower centre are left out: there
+    # they are almost always tower steel that Phase 1 called vegetation (forest towers), and
+    # the attachment points are not where a vegetation clearance is measured.
+    tower_exclusion_m: float = 8.0
 
     @property
     def monitor_m(self) -> float:

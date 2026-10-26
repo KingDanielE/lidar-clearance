@@ -217,10 +217,19 @@ def fit_spans(
         idx = wire_idx[span.idx]
         idx = idx[~_near_towers(points[idx], span, tower_margin)]
         local = Span(span.id, span.a, span.b, span.tower_a, span.tower_b, idx)
-        groups = [g for g in split_conductors(points, local) if len(g) >= 10]
-        fitted = [fit_conductor(points, g, local, 0, ground_tree, ground_z) for g in groups]
-        for c in fitted:
+        def fit_group(g, eps):
+            c = fit_conductor(points, g, local, 0, ground_tree, ground_z)
             c.rejected = validate(c, min_points, min_coverage, min_extent, max_rmse)
+            # Two conductors bridged by stray points fail on RMSE: split tighter and retry.
+            if c.rejected and c.rejected.startswith("rmse") and len(g) >= 2 * min_points and eps > 0.15:
+                sub = Span(local.id, local.a, local.b, local.tower_a, local.tower_b, g)
+                parts = [p for p in split_conductors(points, sub, eps=eps / 2) if len(p) >= 10]
+                if len(parts) > 1:
+                    return [r for p in parts for r in fit_group(p, eps / 2)]
+            return [c]
+
+        groups = [g for g in split_conductors(points, local) if len(g) >= 10]
+        fitted = [c for g in groups for c in fit_group(g, 0.5)]
         kept = [c for c in fitted if c.rejected is None]
         for cid, c in enumerate(kept):
             c.id = cid

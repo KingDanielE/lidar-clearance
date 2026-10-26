@@ -89,7 +89,9 @@ def plot(points, towers: list[Tower], spans, conds: list[Conductor], prefix: str
     by_span = {}
     for c in conds:
         by_span.setdefault(c.span_id, []).append(c)
-    ids = sorted(by_span)
+    ids = sorted(by_span) or [s.id for s in spans[:1]]
+    if not ids:
+        return files
     fig, axes = plt.subplots(len(ids), 1, figsize=(13, 3.6 * len(ids)), squeeze=False)
     colors = plt.cm.tab10.colors
     for ax, sid in zip(axes[:, 0], ids):
@@ -132,11 +134,11 @@ def plot(points, towers: list[Tower], spans, conds: list[Conductor], prefix: str
     return files
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("input", help="classified voxels LAS from Phase 1")
     ap.add_argument("--out", default="out")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     name = Path(args.input).stem.replace("_classified_voxels", "")
