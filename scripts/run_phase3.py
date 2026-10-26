@@ -264,6 +264,10 @@ def main(argv=None):
         "rules": {**rules.__dict__, "monitor_m": rules.monitor_m},
         "line": {**line.__dict__, "swing_deg": round(math.degrees(line.swing_rad), 1), "assumed_span_m_used": round(assumed, 1)},
         "conductors": len(model.conductors),
+        # Short pieces with no tower to pivot from: checked as surveyed only.
+        "conductors_not_assessed_for_sag_wind": sum(
+            not any(c.conductor is cond and c.scenario == scenarios.MAX_SAG for c in curves) for cond in model.conductors
+        ),
         "vegetation_points": int(len(veg)),
         "vegetation_points_dropped": dropped,
         "points_by_tier": tier_counts(clr, rules),
@@ -288,11 +292,32 @@ def main(argv=None):
             "hazard_strike": int(np.sum(tstatus == hazard.STRIKE)),
             "hazard_within_mvcd": int(np.sum(tstatus == hazard.FLASHOVER)),
         }
+        pred_run = validate3.Run(veg_idx, worst, zone_rows, xy, status)
         report["phase3_vs_truth"] = validate3.compare(
-            validate3.Run(veg_idx, worst, zone_rows, xy, status),
-            validate3.Run(tidx, tclr.worst()[0], tz, txy, tstatus),
-            rules,
+            pred_run, validate3.Run(tidx, tclr.worst()[0], tz, txy, tstatus), rules,
         )
+        # End to end: everything from the hand labels, including the conductor model (fitted
+        # to hand-labelled wire). The run above shares our conductor model, so it cannot see
+        # a wrong conductor; this one can.
+        ref_labels = labels.copy()
+        ref_labels[cloud.labels == PYLON] = PYLON
+        ref_model = linemodel.build(pts, ref_labels, cloud.labels == WIRE)
+        if ref_model.conductors:
+            _, rcurves, _, rveg, rhag, rclr, _, ridx = analyse(pts, ref_labels, tv, rules, line, dtm, model=ref_model)
+            rz, _ = encroach.zones(rveg, rclr, rules, origin)
+            rxy, rh = hazard.tree_tops(rveg, rhag)
+            _, _, _, rstatus = hazard.fall_in(rxy, rh, dtm, np.vstack([c.xyz for c in rcurves]), rules.mvcd_m)
+            report["reference"] = {
+                "conductors": len(ref_model.conductors),
+                "towers": len(ref_model.towers),
+                "min_clearance_by_scenario_m": {s: round(float(d.min()), 2) for s, d in rclr.dist.items()},
+                "zones_by_tier": {t: sum(z["tier"] == t for z in rz) for t in encroach.TIERS[:3]},
+                "hazard_strike": int(np.sum(rstatus == hazard.STRIKE)),
+                "hazard_within_mvcd": int(np.sum(rstatus == hazard.FLASHOVER)),
+            }
+            report["end_to_end_vs_truth"] = validate3.compare(
+                pred_run, validate3.Run(ridx, rclr.worst()[0], rz, rxy, rstatus), rules,
+            )
 
     print(f"{name}: {len(model.conductors)} conductors, {len(veg):,} vegetation points (dropped: {dropped}), swing {math.degrees(line.swing_rad):.1f} deg")
     print("  min clearance by scenario:", report["min_clearance_by_scenario_m"])
@@ -306,7 +331,11 @@ def main(argv=None):
     if "with_truth_vegetation" in report:
         print("  with truth vegetation:", report["with_truth_vegetation"])
         v = report["phase3_vs_truth"]
-        print("  vs truth: flagged points", v["flagged_points"], "| zones", v["zones"], "| hazard trees", v["hazard_trees"])
+        print("  vs truth (same model): flagged points", v["flagged_points"], "| zones", v["zones"], "| hazard trees", v["hazard_trees"])
+        if "end_to_end_vs_truth" in report:
+            print("  reference (all hand labels):", report["reference"])
+            v = report["end_to_end_vs_truth"]
+            print("  END TO END: flagged points", v["flagged_points"], "| zones", v["zones"], "| hazard trees", v["hazard_trees"])
 
     (out / f"{name}_phase3.json").write_text(json.dumps(report, indent=2, default=str))
     cols = [k for k in (zone_rows[0] if zone_rows else {}) if not k.startswith("_")]

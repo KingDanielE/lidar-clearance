@@ -10,9 +10,14 @@ Blowout. Wind pushes the conductor sideways; it swings as a rigid curve about th
 between its attachment points by theta = atan(wind load / weight per metre). Both sides
 are checked.
 
-Partial spans (cut off by the tile edge) have one attachment point outside the data. Its
-position is extrapolated along the fitted curve at an assumed span length, so their max-sag
-and blowout positions are estimates and are flagged as such.
+Attachment points come from what each conductor's own data reaches (Conductor.at_tower_a/b):
+- both towers: exact.
+- one tower, and at least `min_estimate_m` of data: the far attachment is extrapolated
+  along the fitted curve at an assumed span length; max sag and blowout are flagged
+  `estimated`.
+- otherwise (no tower, or a short piece): not assessed for sag and wind; only the
+  as-surveyed position is checked. Extrapolating a 15 m piece over a 300 m span put the
+  wind-swung wire metres off, into trees that were nowhere near the real wire (t2z5).
 """
 
 import math
@@ -43,6 +48,7 @@ class LineParams:
     weight_n_per_m: float = 15.9
     wind_pressure_pa: float = 300.0
     assumed_span_m: float | None = None  # partial spans; default: median full span, else 300
+    min_estimate_m: float = 30.0  # shortest one-tower piece whose sag and wind are estimated
 
     @property
     def swing_rad(self) -> float:
@@ -74,13 +80,14 @@ def through_points(a: float, za: float, b: float, zb: float, length: float):
     return z0, u0, c
 
 
-def attachments(cond: Conductor, span: Span, assumed_span: float) -> tuple[float, float, bool]:
-    """(u_a, u_b, estimated): attachment positions along the conductor."""
-    if span.full:
+def attachments(cond: Conductor, span: Span, assumed_span: float, min_estimate: float = 30.0):
+    """(u_a, u_b, estimated) attachment positions along the conductor, or None when they
+    cannot be known (no tower reached, or too short a piece to extrapolate)."""
+    if cond.at_tower_a and cond.at_tower_b:
         return cond.u_min, cond.u_max, False
-    if span.tower_a is None and span.tower_b is None:
-        return cond.u_min, cond.u_max, True
-    u_tower = 0.0 if span.tower_a is not None else float((span.b - cond.origin) @ cond.axis)
+    if not (cond.at_tower_a or cond.at_tower_b) or cond.u_max - cond.u_min < min_estimate:
+        return None
+    u_tower = 0.0 if cond.at_tower_a else float((span.b - cond.origin) @ cond.axis)
     if 0.5 * (cond.u_min + cond.u_max) > u_tower:
         far = u_tower + max(assumed_span, cond.u_max - u_tower + 1.0)
         return u_tower, far, True
@@ -128,8 +135,11 @@ def curves(conductors: list[Conductor], spans: list[Span], p: LineParams, step: 
     for cond in conductors:
         span = by_id[cond.span_id]
         u = np.arange(cond.u_min, cond.u_max + step / 2, step)
-        ua, ub, est = attachments(cond, span, assumed)
         out.append(Curve(AS_SURVEYED, cond, _xyz(cond, u, cond.z(u)), False))
+        att = attachments(cond, span, assumed, p.min_estimate_m)
+        if att is None:
+            continue  # not assessed for sag and wind
+        ua, ub, est = att
         hot = hot_params(cond, ua, ub, p.t_max_c - p.t_survey_c, p.alpha_per_c)
         out.append(Curve(MAX_SAG, cond, _xyz(cond, u, _cat(*hot, u)), est))
         windy = hot_params(cond, ua, ub, p.t_wind_c - p.t_survey_c, p.alpha_per_c)

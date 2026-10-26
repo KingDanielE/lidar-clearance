@@ -59,6 +59,15 @@ def summarise(out: Path, name: str) -> dict:
             row[f"{short}_P"], row[f"{short}_R"] = v[key]["precision"], v[key]["recall"]
         row["zones_P"] = v["zones"]["predicted_zones"]["precision"]
         row["zones_R"] = v["zones"]["predicted_zones"]["recall"]
+    e = p3.get("end_to_end_vs_truth")
+    if e:
+        ref = p3["reference"]
+        row["ref_zones"] = "/".join(str(ref["zones_by_tier"][k]) for k in tiers)
+        row["e2e_zones_P"] = e["zones"]["predicted_zones"]["precision"]
+        row["e2e_zones_R"] = e["zones"]["predicted_zones"]["recall"]
+        row["e2e_same_tier"] = f"{e['zones']['same_tier']}/{e['zones']['pairs']}"
+        row["e2e_trees_P"] = e["hazard_trees"]["precision"]
+        row["e2e_trees_R"] = e["hazard_trees"]["recall"]
     return row
 
 

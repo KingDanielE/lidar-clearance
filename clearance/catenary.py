@@ -35,7 +35,9 @@ class Conductor:
     rmse_z: float
     rmse_xy: float  # lateral scatter about the straight plan line
     coverage: float  # share of 1 m bins along the extent that have points
-    full_span: bool
+    full_span: bool  # data reaches both towers: modelled tower to tower
+    at_tower_a: bool = False  # data reaches the span's start tower (u = 0)
+    at_tower_b: bool = False  # data reaches the span's end tower
     sag: float | None = None  # mid-span drop below the chord; full spans only
     min_ground_clearance: float | None = None
     outliers: int = 0  # points dropped by the residual trim
@@ -102,7 +104,15 @@ def fit(u: np.ndarray, z: np.ndarray) -> tuple[float, float, float]:
     return tuple(float(v) for v in r.x)
 
 
-def fit_conductor(points: np.ndarray, idx: np.ndarray, span: Span, cid: int, ground_tree=None, ground_z=None) -> Conductor:
+def _rms(res: np.ndarray) -> float:
+    with np.errstate(over="ignore", invalid="ignore"):  # diverged fits; validate() rejects
+        return float(np.sqrt(np.mean(res**2)))
+
+
+def fit_conductor(
+    points: np.ndarray, idx: np.ndarray, span: Span, cid: int, ground_tree=None, ground_z=None,
+    tower_reach: float = 8.0,
+) -> Conductor:
     p = points[idx]
     axis = _xy_axis(p[:, :2])[0]
     d = (span.b - span.a) / max(span.length, 1e-9)
@@ -131,23 +141,29 @@ def fit_conductor(points: np.ndarray, idx: np.ndarray, span: Span, cid: int, gro
     idx, u, lateral, p = idx[keep], u[keep], lateral[keep], p[keep]
     res = catenary_z(u, z0, u0, c) - p[:, 2]
 
-    end = (span.b - origin) @ axis
-    if span.full:
-        u_min, u_max = 0.0, float(end)
-    else:
-        u_min, u_max = float(u.min()), float(u.max())
+    end = float((span.b - origin) @ axis)
+    # Model a wire only where its data supports it: it reaches a tower only if its points
+    # come within `tower_reach` of it (past the tower margin left out of the fit). A wire
+    # whose data stops short belongs elsewhere (e.g. a parallel line turning away).
+    at_a = span.tower_a is not None and u.min() <= tower_reach
+    at_b = span.tower_b is not None and u.max() >= end - tower_reach
+    u_min = 0.0 if at_a else float(u.min())
+    u_max = end if at_b else float(u.max())
+    full = bool(at_a and at_b)
     bins = np.arange(np.floor(u_min), np.ceil(u_max) + 1)
     coverage = float(np.mean(np.histogram(u, bins=bins)[0] > 0)) if len(bins) > 1 else 0.0
 
     cond = Conductor(
         span.id, cid, idx, origin, axis, z0, u0, c, u_min, u_max,
-        rmse_z=float(np.sqrt(np.mean(res**2))),
+        rmse_z=_rms(res),
         rmse_xy=float(np.std(lateral)),
         coverage=coverage,
-        full_span=span.full,
+        full_span=full,
+        at_tower_a=bool(at_a),
+        at_tower_b=bool(at_b),
         outliers=outliers,
     )
-    if span.full:
+    if full:
         uu = np.linspace(u_min, u_max, 400)
         zz = cond.z(uu)
         chord = zz[0] + (zz[-1] - zz[0]) * (uu - uu[0]) / (uu[-1] - uu[0])
@@ -218,7 +234,7 @@ def fit_spans(
         idx = idx[~_near_towers(points[idx], span, tower_margin)]
         local = Span(span.id, span.a, span.b, span.tower_a, span.tower_b, idx)
         def fit_group(g, eps):
-            c = fit_conductor(points, g, local, 0, ground_tree, ground_z)
+            c = fit_conductor(points, g, local, 0, ground_tree, ground_z, tower_reach=tower_margin + 5.0)
             c.rejected = validate(c, min_points, min_coverage, min_extent, max_rmse)
             # Two conductors bridged by stray points fail on RMSE: split tighter and retry.
             if c.rejected and c.rejected.startswith("rmse") and len(g) >= 2 * min_points and eps > 0.15:
