@@ -80,7 +80,9 @@ class LineParams:
         return self.e_modulus_gpa * 1e9 * self.area_mm2 * 1e-6
 
 
-def state_change(h1: float, w1: float, t1: float, w2: float, t2: float, span: float, ea: float, alpha: float) -> float:
+def state_change(
+    h1: float, w1: float, t1: float, w2: float, t2: float, span: float, ea: float, alpha: float
+) -> float:
     """Horizontal tension H2 at temperature t2 and load w2 (N/m), from H1 at t1 and w1.
     Parabolic change-of-state equation (module docstring); one positive root."""
     k = h1 - ea * w1**2 * span**2 / (24 * h1**2) - ea * alpha * (t2 - t1)
@@ -198,7 +200,9 @@ def curves(conductors: list[Conductor], spans: list[Span], p: LineParams, step: 
         iced = loaded_params(cond, ua, ub, w + p.ice_n_per_m, p.t_ice_c, p)
         out.append(Curve(MAX_SAG_ICE, cond, _xyz(cond, u, _cat(*iced, u)), est))
         # In wind the conductor hangs in the plane of its resultant load.
-        windy = loaded_params(cond, ua, ub, math.hypot(w, p.wind_pressure_pa * p.diameter_m), p.t_wind_c, p)
+        windy = loaded_params(
+            cond, ua, ub, math.hypot(w, p.wind_pressure_pa * p.diameter_m), p.t_wind_c, p
+        )
         out.append(Curve(BLOWOUT_LEFT, cond, swing(cond, windy, ua, ub, u, theta, +1), est))
         out.append(Curve(BLOWOUT_RIGHT, cond, swing(cond, windy, ua, ub, u, theta, -1), est))
     return out, assumed

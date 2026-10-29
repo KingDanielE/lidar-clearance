@@ -104,7 +104,13 @@ def compute(veg: np.ndarray, curves: list[Curve], rules: Rules) -> Clearance:
     return Clearance(dist, nearest, samples, owner, curves, shift)
 
 
-def floating(veg: np.ndarray, hag: np.ndarray, max_points: int = 200, min_hag: float = 3.0, voxel: float = 1.0):
+def floating(
+    veg: np.ndarray,
+    hag: np.ndarray,
+    max_points: int = 200,
+    min_hag: float = 3.0,
+    voxel: float = 1.0,
+):
     """Small vegetation-labelled clusters hanging in the air: not plants (Phase 1 errors,
     typically stray conductor or tower points). Vegetation grows from the ground: a crown,
     even one overhanging the line, is part of a large connected cluster, and a small cluster
@@ -118,7 +124,9 @@ def floating(veg: np.ndarray, hag: np.ndarray, max_points: int = 200, min_hag: f
     return out
 
 
-def wire_fragments(veg: np.ndarray, clr: Clearance, radius: float = 0.5, share: float = 0.8, reach: float = 1.0):
+def wire_fragments(
+    veg: np.ndarray, clr: Clearance, radius: float = 0.5, share: float = 0.8, reach: float = 1.0
+):
     """Vegetation-labelled points that are really conductor (Phase 1 errors).
 
     A point within `radius` of the as-surveyed conductor model counts as wire if most of its
@@ -139,8 +147,17 @@ def wire_fragments(veg: np.ndarray, clr: Clearance, radius: float = 0.5, share: 
     return out
 
 
-def unmodelled_wire(wire: np.ndarray, curves: list, veg: np.ndarray, rules: Rules, towers, origin,
-                    gap: float = 1.0, min_length: float = 10.0, min_aspect: float = 4.0) -> list[dict]:
+def unmodelled_wire(
+    wire: np.ndarray,
+    curves: list,
+    veg: np.ndarray,
+    rules: Rules,
+    towers,
+    origin,
+    gap: float = 1.0,
+    min_length: float = 10.0,
+    min_aspect: float = 4.0,
+) -> list[dict]:
     """Stretches of wire with no conductor model, and the vegetation next to them.
 
     Clearance is only measured to modelled conductors, so vegetation beside wire that Phase 2
@@ -176,11 +193,16 @@ def unmodelled_wire(wire: np.ndarray, curves: list, veg: np.ndarray, rules: Rule
             hits = vtree.query_ball_point(wire[sel], r=rules.monitor_m)
             near = len(set(i for h in hits for i in h))
         c = wire[sel].mean(axis=0)
-        rows.append({
-            "x": round(float(c[0] + origin[0]), 1), "y": round(float(c[1] + origin[1]), 1),
-            "z": round(float(c[2] + origin[2]), 1), "length_m": round(length, 1),
-            "wire_points": int(len(sel)), "vegetation_within_monitor_m": int(near),
-        })
+        rows.append(
+            {
+                "x": round(float(c[0] + origin[0]), 1),
+                "y": round(float(c[1] + origin[1]), 1),
+                "z": round(float(c[2] + origin[2]), 1),
+                "length_m": round(length, 1),
+                "wire_points": int(len(sel)),
+                "vegetation_within_monitor_m": int(near),
+            }
+        )
     rows.sort(key=lambda r: -r["vegetation_within_monitor_m"])
     return rows
 
@@ -209,26 +231,28 @@ def zones(veg: np.ndarray, clr: Clearance, rules: Rules, origin: np.ndarray, vox
             area = float(ConvexHull(veg[sel, :2]).volume) if len(sel) >= 3 else 0.0
         except Exception:  # collinear points
             area = 0.0
-        rows.append({
-            "tier": tier,
-            "min_clearance_m": round(d, 2),
-            "required_m": round(required, 2),
-            "margin_m": round(d - required, 2),
-            "worst_scenario": scen,
-            "estimated": bool(curve.estimated),
-            **{f"min_{s}_m": round(float(clr.dist[s][sel].min()), 2) for s in clr.dist},
-            "span": curve.conductor.span_id,
-            "conductor": curve.conductor.id,
-            "horizontal_m": round(float(np.linalg.norm(veg[k, :2] - wire_pt[:2])), 2),
-            "vertical_m": round(float(wire_pt[2] - veg[k, 2]), 2),  # > 0: vegetation below wire
-            "x": round(float(veg[k, 0] + origin[0]), 2),
-            "y": round(float(veg[k, 1] + origin[1]), 2),
-            "z": round(float(veg[k, 2] + origin[2]), 2),
-            "points": int(len(sel)),
-            "plan_area_m2": round(area, 1),
-            "years_to_violation": round(max(0.0, (d - required) / rules.growth_m_per_year), 1),
-            "_points": sel,
-        })
+        rows.append(
+            {
+                "tier": tier,
+                "min_clearance_m": round(d, 2),
+                "required_m": round(required, 2),
+                "margin_m": round(d - required, 2),
+                "worst_scenario": scen,
+                "estimated": bool(curve.estimated),
+                **{f"min_{s}_m": round(float(clr.dist[s][sel].min()), 2) for s in clr.dist},
+                "span": curve.conductor.span_id,
+                "conductor": curve.conductor.id,
+                "horizontal_m": round(float(np.linalg.norm(veg[k, :2] - wire_pt[:2])), 2),
+                "vertical_m": round(float(wire_pt[2] - veg[k, 2]), 2),  # > 0: vegetation below wire
+                "x": round(float(veg[k, 0] + origin[0]), 2),
+                "y": round(float(veg[k, 1] + origin[1]), 2),
+                "z": round(float(veg[k, 2] + origin[2]), 2),
+                "points": int(len(sel)),
+                "plan_area_m2": round(area, 1),
+                "years_to_violation": round(max(0.0, (d - required) / rules.growth_m_per_year), 1),
+                "_points": sel,
+            }
+        )
     rows.sort(key=lambda r: (order[r["tier"]], r["margin_m"]))
     for i, r in enumerate(rows):
         r["zone"] = i + 1

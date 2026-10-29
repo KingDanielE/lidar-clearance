@@ -56,7 +56,9 @@ def direction_groups(dirs: np.ndarray, ok: np.ndarray, tol_deg: float = 7.5, min
     """Masks of wire points sharing a plan direction (peaks of a circular histogram)."""
     ang = np.degrees(np.arctan2(dirs[:, 1], dirs[:, 0])) % 180.0
     hist, _ = np.histogram(ang[ok], bins=180, range=(0, 180))
-    smooth = np.convolve(np.concatenate([hist[-3:], hist, hist[:3]]), np.ones(5) / 5, mode="same")[3:-3]
+    smooth = np.convolve(np.concatenate([hist[-3:], hist, hist[:3]]), np.ones(5) / 5, mode="same")[
+        3:-3
+    ]
     peaks = []
     for i in np.argsort(-smooth):
         if smooth[i] * 5 < min_points:
@@ -74,8 +76,15 @@ def direction_groups(dirs: np.ndarray, ok: np.ndarray, tol_deg: float = 7.5, min
 
 
 def towers_from_angles(
-    w: np.ndarray, dirs: np.ndarray, ok: np.ndarray, other: np.ndarray, radius: float = 6.0,
-    max_r: float = 0.9, min_neighbours: int = 20, min_cluster: int = 15, step: int = 3,
+    w: np.ndarray,
+    dirs: np.ndarray,
+    ok: np.ndarray,
+    other: np.ndarray,
+    radius: float = 6.0,
+    max_r: float = 0.9,
+    min_neighbours: int = 20,
+    min_cluster: int = 15,
+    step: int = 3,
 ) -> list[Tower]:
     """Towers where wires change direction. In doubled-angle form a single direction has
     mean resultant length ~1; two directions `d` apart give ~|cos d|. The 3D radius keeps
@@ -94,8 +103,9 @@ def towers_from_angles(
     if len(cand) < min_cluster:
         return []
     cand = np.asarray(cand)
-    idx, comp = components(np.column_stack([w[cand, :2], np.zeros(len(cand))]), np.ones(len(cand), bool), 5.0)
-    other_tree = cKDTree(other[:, :2]) if len(other) else None
+    idx, comp = components(
+        np.column_stack([w[cand, :2], np.zeros(len(cand))]), np.ones(len(cand), bool), 5.0
+    )
     out = []
     for _, pos in _groups(comp):
         sel_c = cand[idx[pos]]
@@ -108,7 +118,9 @@ def towers_from_angles(
     return out
 
 
-def _is_crossing(w, dirs, ok, xy, reach: float = 30.0, gap: float = 6.0, min_side: int = 30) -> bool:
+def _is_crossing(
+    w, dirs, ok, xy, reach: float = 30.0, gap: float = 6.0, min_side: int = 30
+) -> bool:
     """True if every wire direction near `xy` continues on both sides of it: two lines
     crossing (or one passing straight through), not an angle or junction tower, where at
     least one direction stops."""
@@ -171,13 +183,24 @@ def find_all_towers(points, labels, dirs, ok, wire_idx, merge_m: float = 8.0) ->
     # Kink and angle towers land within ~1 m of the true towers on the real tiles, so a
     # plain 8 m merge keeps junction towers (14-18 m apart) separate. Moving them onto the
     # densest "steel" column first was tried and pulled forest towers 8-9 m off, onto canopy.
-    return merge([find_towers(points, labels), kinks, towers_from_angles(w, dirs, ok, other)], merge_m)
+    return merge(
+        [find_towers(points, labels), kinks, towers_from_angles(w, dirs, ok, other)], merge_m
+    )
 
 
 def terminal_towers(
-    points, labels, wire_idx, spans: list[Span], towers: list[Tower] | None = None,
-    beyond: float = 15.0, radius: float = 10.0, min_ground: int = 20, min_steel: int = 30,
-    min_ray_m: float = 30.0, min_separation: float = 25.0, max_scattering: float = 0.2,
+    points,
+    labels,
+    wire_idx,
+    spans: list[Span],
+    towers: list[Tower] | None = None,
+    beyond: float = 15.0,
+    radius: float = 10.0,
+    min_ground: int = 20,
+    min_steel: int = 30,
+    min_ray_m: float = 30.0,
+    min_separation: float = 25.0,
+    max_scattering: float = 0.2,
 ) -> list[Tower]:
     """Towers where a line ends. A ray (partial span) that stops while the survey goes on
     (ground beyond its end) ends on a structure, if there is steel at wire height there.
@@ -190,7 +213,11 @@ def terminal_towers(
     otree = cKDTree(other[:, :2])
     w = points[wire_idx]
     out = []
-    known = np.array([t.xy for t in towers], dtype=np.float64).reshape(-1, 2) if towers else np.zeros((0, 2))
+    known = (
+        np.array([t.xy for t in towers], dtype=np.float64).reshape(-1, 2)
+        if towers
+        else np.zeros((0, 2))
+    )
     for s in spans:
         # Short rays are hardware and jumper pieces just past a tower, not a line ending.
         if s.tower_a is None or s.tower_b is not None or s.length < min_ray_m:
@@ -260,8 +287,17 @@ def _seg(xy, a, b, clamp: bool = True):
 
 
 def build_graph(
-    points, wire_idx, towers: list[Tower], dirs, ok, lateral: float = 12.0, min_cover: float = 0.6,
-    through: float | None = None, max_span: float = 800.0, bin_m: float = 2.0, min_ray_points: int = 50,
+    points,
+    wire_idx,
+    towers: list[Tower],
+    dirs,
+    ok,
+    lateral: float = 12.0,
+    min_cover: float = 0.6,
+    through: float | None = None,
+    max_span: float = 800.0,
+    bin_m: float = 2.0,
+    min_ray_points: int = 50,
 ) -> list[Span]:
     """Spans as graph edges. Span.idx indexes the wire point array (`wire_idx` order)."""
     w = points[wire_idx]
@@ -282,7 +318,13 @@ def build_graph(
                 continue
             u = (b - a) / L
             dist, s = _seg(wxy, a, b)
-            m = (dist <= lateral) & ok & (np.abs(dirs @ u) >= _span_cos(L, 20.0)) & (s > 4.0) & (s < L - 4.0)
+            m = (
+                (dist <= lateral)
+                & ok
+                & (np.abs(dirs @ u) >= _span_cos(L, 20.0))
+                & (s > 4.0)
+                & (s < L - 4.0)
+            )
             nbins = max(1, int((L - 8.0) // bin_m))
             counts = np.histogram(s[m], bins=nbins, range=(4.0, L - 4.0))[0]
             if np.mean(counts >= 3) >= min_cover:
@@ -301,7 +343,12 @@ def build_graph(
             interior = (s > 0.05 * L) & (s < 0.95 * L)
             if np.any(interior & (d < through)):
                 continue
-            tri = np.array([((min(i, k), max(i, k)) in edge_set) and ((min(j, k), max(j, k)) in edge_set) for k in others])
+            tri = np.array(
+                [
+                    ((min(i, k), max(i, k)) in edge_set) and ((min(j, k), max(j, k)) in edge_set)
+                    for k in others
+                ]
+            )
             if np.any(tri & interior & (d < 0.15 * L)):
                 continue
         kept.append((i, j))
@@ -321,10 +368,18 @@ def build_graph(
         # Only points beside the edge, not past its towers: a span continuing almost
         # straight beyond a tower must not lose its first metres to this one.
         inside = (s >= -3.0) & (s <= L + 3.0)
-        okk = inside & (d <= lateral) & ((ok & (np.abs(dirs @ u) >= _span_cos(L, 30.0))) | near_tower) & (d < best)
+        okk = (
+            inside
+            & (d <= lateral)
+            & ((ok & (np.abs(dirs @ u) >= _span_cos(L, 30.0))) | near_tower)
+            & (d < best)
+        )
         best[okk] = d[okk]
         owner[okk] = e
-    spans = [Span(e, T[i], T[j], towers[i].id, towers[j].id, np.nonzero(owner == e)[0]) for e, (i, j) in enumerate(kept)]
+    spans = [
+        Span(e, T[i], T[j], towers[i].id, towers[j].id, np.nonzero(owner == e)[0])
+        for e, (i, j) in enumerate(kept)
+    ]
 
     # 2. Rays: wire leaving a tower that no edge explains (partial spans to the tile edge).
     left = owner < 0
@@ -337,7 +392,9 @@ def build_graph(
             v = wxy[cand] - T[k]
             r = np.linalg.norm(v, axis=1)
             near = (r > 3.0) & (r < 80.0)
-            radial = np.abs(np.einsum("ij,ij->i", v / np.maximum(r, 1e-9)[:, None], dirs[cand])) >= cos20
+            radial = (
+                np.abs(np.einsum("ij,ij->i", v / np.maximum(r, 1e-9)[:, None], dirs[cand])) >= cos20
+            )
             sel = cand[near & radial]
             if len(sel) < min_ray_points:
                 break
@@ -352,7 +409,12 @@ def build_graph(
             v = wxy - T[k]
             along = v @ u
             lat = np.abs(v @ np.array([-u[1], u[0]]))
-            on = left & (along > 0) & (lat <= lateral) & ((ok & (np.abs(dirs @ u) >= cos30)) | near_tower)
+            on = (
+                left
+                & (along > 0)
+                & (lat <= lateral)
+                & ((ok & (np.abs(dirs @ u) >= cos30)) | near_tower)
+            )
             if on.sum() < min_ray_points:
                 tried[sel] = True  # nothing coherent along this bearing; do not retry it
                 continue
@@ -365,7 +427,9 @@ def build_graph(
             if u @ (wxy[on].mean(axis=0) - T[k]) < 0:
                 u = -u
             far = float(((wxy[on] - T[k]) @ u).max())
-            spans.append(Span(len(spans), T[k].copy(), T[k] + u * far, towers[k].id, None, np.nonzero(on)[0]))
+            spans.append(
+                Span(len(spans), T[k].copy(), T[k] + u * far, towers[k].id, None, np.nonzero(on)[0])
+            )
             left &= ~on
             tried |= on
 

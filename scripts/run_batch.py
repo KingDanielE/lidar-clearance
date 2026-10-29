@@ -1,6 +1,7 @@
 """Run all three phases on several tiles and write one summary row per tile.
 
-    python -m scripts.run_batch data/t5c2.las data/t5b6.las --truth-field ground_truth --truth-map gridnet
+    python -m scripts.run_batch data/t5c2.las data/t5b6.las \\
+        --truth-field ground_truth --truth-map gridnet
 
 Outputs go to out/<tile>/ as usual; the summary to out/batch_summary.csv and .md.
 --skip-existing reuses a tile's outputs when its Phase 3 report is already there.
@@ -37,12 +38,21 @@ def summarise(out: Path, name: str) -> dict:
         "spans": len(p2["spans"]),
         "conductors": len(p2["conductors"]),
         "max_rmse_cm": round(100 * max((c["rmse_z_m"] for c in p2["conductors"]), default=0), 1),
-        "max_dz_vs_truth_cm": round(100 * max((x["max_abs_dz_m"] for x in p2.get("predicted_vs_truth", []) if x["match"]), default=0), 1),
+        "max_dz_vs_truth_cm": round(
+            100
+            * max(
+                (x["max_abs_dz_m"] for x in p2.get("predicted_vs_truth", []) if x["match"]),
+                default=0,
+            ),
+            1,
+        ),
     }
     clr = p3["min_clearance_by_scenario_m"]
     row["min_clear_surveyed_m"] = clr.get("as_surveyed")
     row["min_clear_max_sag_m"] = clr.get("max_sag")
-    row["min_clear_blowout_m"] = min((v for k, v in clr.items() if k.startswith("blowout")), default=None)
+    row["min_clear_blowout_m"] = min(
+        (v for k, v in clr.items() if k.startswith("blowout")), default=None
+    )
     tiers = ("violation", "urgent", "monitor")
     row["zones"] = "/".join(str(sum(z["tier"] == t for z in p3["zones"])) for t in tiers)
     t = p3.get("with_truth_vegetation")
@@ -113,7 +123,10 @@ def main(argv=None):
         w.writeheader()
         w.writerows(rows)
     md = ["| " + " | ".join(keys) + " |", "|" + "---|" * len(keys)]
-    md += ["| " + " | ".join("" if r.get(k) is None else str(r.get(k)) for k in keys) + " |" for r in rows]
+    md += [
+        "| " + " | ".join("" if r.get(k) is None else str(r.get(k)) for k in keys) + " |"
+        for r in rows
+    ]
     (base / "batch_summary.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
 

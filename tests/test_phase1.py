@@ -31,7 +31,9 @@ def test_ground_and_vegetation(synthetic):
 
 def test_gap_below_ignores_points_in_the_same_run():
     # A sloping wire: three points stacked 0.2 m apart in one column, 20 m above ground.
-    pts = np.array([[0.1, 0.1, 0.0], [0.1, 0.1, 20.0], [0.1, 0.1, 20.2], [0.1, 0.1, 20.4]], np.float32)
+    pts = np.array(
+        [[0.1, 0.1, 0.0], [0.1, 0.1, 20.0], [0.1, 0.1, 20.2], [0.1, 0.1, 20.4]], np.float32
+    )
     gap = gap_below(pts)
     assert np.isinf(gap[0])
     assert np.allclose(gap[1:], 20.0)

@@ -89,8 +89,12 @@ def test_blowout_swings_by_the_wind_angle(corridor):
     # Level span: sag s swings to s sin(theta) sideways, rises by s (1 - cos(theta)).
     s = cond.sag
     theta = line.swing_rad
-    assert (left.xyz[mid, :2] - still.xyz[mid, :2]) @ n == pytest.approx(s * math.sin(theta), abs=0.1)
-    assert (right.xyz[mid, :2] - still.xyz[mid, :2]) @ n == pytest.approx(-s * math.sin(theta), abs=0.1)
+    assert (left.xyz[mid, :2] - still.xyz[mid, :2]) @ n == pytest.approx(
+        s * math.sin(theta), abs=0.1
+    )
+    assert (right.xyz[mid, :2] - still.xyz[mid, :2]) @ n == pytest.approx(
+        -s * math.sin(theta), abs=0.1
+    )
     assert left.xyz[mid, 2] - still.xyz[mid, 2] == pytest.approx(s * (1 - math.cos(theta)), abs=0.1)
 
 
@@ -124,11 +128,13 @@ def test_wire_fragment_dropped_but_contact_kept(corridor):
     clr = encroach.compute(veg, curves, rules)
     frag = encroach.wire_fragments(veg, clr)
     assert frag[: len(wire_bits)].mean() > 0.9
-    assert not frag[len(wire_bits):].any()
+    assert not frag[len(wire_bits) :].any()
 
 
 def test_hazard_tree_reach():
-    dtm = pmf_dtm(np.array([[x, y, 0.0] for x in range(0, 60, 2) for y in range(0, 60, 2)], dtype=np.float32))
+    dtm = pmf_dtm(
+        np.array([[x, y, 0.0] for x in range(0, 60, 2) for y in range(0, 60, 2)], dtype=np.float32)
+    )
     wire = np.column_stack([np.linspace(0, 60, 601), np.full(601, 30.0), np.full(601, 15.0)])
     xy = np.array([[30.0, 50.0], [30.0, 40.0], [30.0, 55.0]])
     h = np.array([30.0, 18.5, 10.0])  # base-to-wire distances: 25, 18.03, 29.2

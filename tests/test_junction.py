@@ -18,7 +18,10 @@ def _graph(pts, labels, info):
 
     t = {x.id: name(x.xy) for x in m.towers}
     spans = sorted(
-        ("".join(sorted(t.get(s.tower_a, "-") + t.get(s.tower_b, "-"))), sum(c.span_id == s.id for c in m.conductors))
+        (
+            "".join(sorted(t.get(s.tower_a, "-") + t.get(s.tower_b, "-"))),
+            sum(c.span_id == s.id for c in m.conductors),
+        )
         for s in m.spans
     )
     return sorted(t.values()), spans, m

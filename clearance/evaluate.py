@@ -45,7 +45,10 @@ def format_report(s: dict, cm: np.ndarray) -> str:
     def f(v):
         return "  -  " if v is None else f"{v:5.3f}"
 
-    lines = ["| class | truth pts | predicted pts | precision | recall | IoU |", "|---|---:|---:|---:|---:|---:|"]
+    lines = [
+        "| class | truth pts | predicted pts | precision | recall | IoU |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
     for c in EVAL_CLASSES:
         r = s[NAMES[c]]
         lines.append(

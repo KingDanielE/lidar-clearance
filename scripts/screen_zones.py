@@ -34,8 +34,13 @@ def screen(src, name: str, fraction: float, chunks: int, workers: int = 8) -> di
     xyz, fields, header = read_sample(src, fraction, chunks, workers=workers)
     lab = remap(fields["ground_truth"].astype(np.int64), GRIDNET)
     wire, veg = xyz[lab == WIRE], xyz[lab == VEGETATION]
-    row = {"zone": name, "points_M": round(header.point_count / 1e6, 1), "sampled": len(xyz),
-           "wire_pts": len(wire), "veg_pts": len(veg)}
+    row = {
+        "zone": name,
+        "points_M": round(header.point_count / 1e6, 1),
+        "sampled": len(xyz),
+        "wire_pts": len(wire),
+        "veg_pts": len(veg),
+    }
     if len(wire) and len(veg):
         d, j = cKDTree(wire).query(veg, k=1, workers=-1)
         k = int(np.argmin(d))
@@ -79,10 +84,15 @@ def main(argv=None):
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
         w.writerows(rows)
-    ranked = sorted((r for r in rows if "min_veg_to_wire_m" in r), key=lambda r: r["min_veg_to_wire_m"])
+    ranked = sorted(
+        (r for r in rows if "min_veg_to_wire_m" in r), key=lambda r: r["min_veg_to_wire_m"]
+    )
     print("\nclosest vegetation to wire (sample):")
     for r in ranked:
-        print(f"  {r['zone']:7s} {r['min_veg_to_wire_m']:6.2f} m  within 8 m: {r['veg_within_8m']:5d}  within 12 m: {r['veg_within_12m']:5d}")
+        print(
+            f"  {r['zone']:7s} {r['min_veg_to_wire_m']:6.2f} m  "
+            f"within 8 m: {r['veg_within_8m']:5d}  within 12 m: {r['veg_within_12m']:5d}"
+        )
 
 
 if __name__ == "__main__":

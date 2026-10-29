@@ -35,7 +35,9 @@ class HttpSource:
         self.bytes_read = 0
 
     def get(self, start: int, length: int) -> bytes:
-        req = urllib.request.Request(self.url, headers={"Range": f"bytes={start}-{start + length - 1}"})
+        req = urllib.request.Request(
+            self.url, headers={"Range": f"bytes={start}-{start + length - 1}"}
+        )
         for attempt in range(3):
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as r:
@@ -50,7 +52,9 @@ class HttpSource:
         raise AssertionError
 
 
-def read_sample(src, fraction: float = 0.02, chunks: int = 2000, fields=("ground_truth",), workers: int = 8):
+def read_sample(
+    src, fraction: float = 0.02, chunks: int = 2000, fields=("ground_truth",), workers: int = 8
+):
     """(xyz (n, 3) float64, {field: values}, header) for ~`fraction` of the points."""
     header = laspy.LasHeader.read_from(io.BytesIO(src.get(0, 65536)))
     missing = [f for f in fields if f not in header.point_format.dimension_names]
@@ -67,9 +71,12 @@ def read_sample(src, fraction: float = 0.02, chunks: int = 2000, fields=("ground
 
     with ThreadPoolExecutor(workers) as ex:
         recs = list(ex.map(fetch, starts))
-    xyz = np.column_stack([
-        np.concatenate([np.asarray(r[d], dtype=np.float64) for r in recs]) * header.scales[i] + header.offsets[i]
-        for i, d in enumerate("XYZ")
-    ])
+    xyz = np.column_stack(
+        [
+            np.concatenate([np.asarray(r[d], dtype=np.float64) for r in recs]) * header.scales[i]
+            + header.offsets[i]
+            for i, d in enumerate("XYZ")
+        ]
+    )
     out = {f: np.concatenate([np.asarray(r[f]) for r in recs]) for f in fields}
     return xyz, out, header

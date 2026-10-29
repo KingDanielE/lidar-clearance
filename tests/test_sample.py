@@ -10,8 +10,13 @@ def test_sample_reads_the_right_points(tmp_path):
     pts = rng.uniform(0, 100, (n, 3)).astype(np.float32)
     labels = (np.arange(n) % 22).astype(np.int16)
     path = tmp_path / "t.las"
-    write_las(path, pts, np.array([1000.0, 2000.0, 300.0]), np.zeros(n, np.uint8),
-              extra={"ground_truth": labels})
+    write_las(
+        path,
+        pts,
+        np.array([1000.0, 2000.0, 300.0]),
+        np.zeros(n, np.uint8),
+        extra={"ground_truth": labels},
+    )
 
     xyz, fields, header = read_sample(LocalSource(path), fraction=0.05, chunks=50, workers=4)
 

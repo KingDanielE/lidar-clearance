@@ -22,11 +22,22 @@ def pylon(x, y, rng, height=30.0, arm_z=26.0, arm=8.0):
     base, top = 3.0, 1.0
     corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
     for sx, sy in corners:
-        pts.append(_segment((x + sx * base, y + sy * base, gz), (x + sx * top, y + sy * top, gz + height), 0.05, rng))
+        pts.append(
+            _segment(
+                (x + sx * base, y + sy * base, gz),
+                (x + sx * top, y + sy * top, gz + height),
+                0.05,
+                rng,
+            )
+        )
     for z in np.arange(gz + 3, gz + height, 3.0):
         half = base + (top - base) * (z - gz) / height
         for (ax, ay), (bx, by) in zip(corners, corners[1:] + corners[:1]):
-            pts.append(_segment((x + ax * half, y + ay * half, z), (x + bx * half, y + by * half, z), 0.08, rng))
+            pts.append(
+                _segment(
+                    (x + ax * half, y + ay * half, z), (x + bx * half, y + by * half, z), 0.08, rng
+                )
+            )
     for z in (arm_z, arm_z + 0.6):
         pts.append(_segment((x, y - arm, gz + z), (x, y + arm, gz + z), 0.05, rng))
     return np.vstack(pts)
@@ -71,7 +82,13 @@ def building(x, y, w, d, h, rng, spacing=0.25):
     return roof
 
 
-JUNCTION_TOWERS = {"A": (20.0, 60.0), "B": (150.0, 60.0), "C": (280.0, 130.0), "D": (170.0, 190.0), "E": (300.0, 145.0)}
+JUNCTION_TOWERS = {
+    "A": (20.0, 60.0),
+    "B": (150.0, 60.0),
+    "C": (280.0, 130.0),
+    "D": (170.0, 190.0),
+    "E": (300.0, 145.0),
+}
 JUNCTION_SPANS = [("A", "B"), ("B", "C"), ("B", "D"), ("C", "E")]
 
 
@@ -97,14 +114,30 @@ def make_junction_scene(seed: int = 0):
         nrm = np.array([-d[1], d[0]])
         for off, h in attach:
             pa, pb = a + off * nrm, b + off * nrm
-            add(catenary((*pa, ground_z(*a) + h), (*pb, ground_z(*b) + h), c=900.0, spacing=0.15, rng=rng), WIRE)
+            add(
+                catenary(
+                    (*pa, ground_z(*a) + h), (*pb, ground_z(*b) + h), c=900.0, spacing=0.15, rng=rng
+                ),
+                WIRE,
+            )
     for _ in range(60):
         tx, ty = rng.uniform(5, 315), rng.uniform(5, 215)
         P = np.array([tx, ty])
         near = min(
-            np.linalg.norm(P - (np.array(JUNCTION_TOWERS[p]) + np.clip(
-                (P - JUNCTION_TOWERS[p]) @ (np.subtract(JUNCTION_TOWERS[q], JUNCTION_TOWERS[p])) / np.sum(np.subtract(JUNCTION_TOWERS[q], JUNCTION_TOWERS[p]) ** 2), 0, 1
-            ) * np.subtract(JUNCTION_TOWERS[q], JUNCTION_TOWERS[p])))
+            np.linalg.norm(
+                P
+                - (
+                    np.array(JUNCTION_TOWERS[p])
+                    + np.clip(
+                        (P - JUNCTION_TOWERS[p])
+                        @ (np.subtract(JUNCTION_TOWERS[q], JUNCTION_TOWERS[p]))
+                        / np.sum(np.subtract(JUNCTION_TOWERS[q], JUNCTION_TOWERS[p]) ** 2),
+                        0,
+                        1,
+                    )
+                    * np.subtract(JUNCTION_TOWERS[q], JUNCTION_TOWERS[p])
+                )
+            )
             for p, q in JUNCTION_SPANS
         )
         if near > 14:

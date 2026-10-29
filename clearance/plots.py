@@ -95,7 +95,9 @@ def plot_all(points, labels, out_prefix, title="", truth=None, max_points=400_00
         m = lab[sub] == cl
         if m.any():
             q = p[sub][m]
-            ax.scatter(q[:, 0], q[:, 1], q[:, 2], s=0.3 if cl != WIRE else 1.2, c=COLORS[cl], linewidths=0)
+            ax.scatter(
+                q[:, 0], q[:, 1], q[:, 2], s=0.3 if cl != WIRE else 1.2, c=COLORS[cl], linewidths=0
+            )
     ax.set_box_aspect((np.ptp(p[:, 0]), np.ptp(p[:, 1]), max(np.ptp(p[:, 2]) * 2, 1)))
     ax.view_init(elev=25, azim=-60)
     ax.set_title(f"{title} 3D view")

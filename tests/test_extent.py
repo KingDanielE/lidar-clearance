@@ -10,7 +10,9 @@ from clearance.spans import Span
 
 def _wire(u0, u1, rng):
     u = rng.uniform(u0, u1, 2000)
-    return np.column_stack([u, np.zeros_like(u), catenary_z(u, 40.0, 100.0, 1100.0)]).astype(np.float32)
+    return np.column_stack([u, np.zeros_like(u), catenary_z(u, 40.0, 100.0, 1100.0)]).astype(
+        np.float32
+    )
 
 
 def test_wire_stopping_short_of_a_tower_is_not_modelled_to_it():

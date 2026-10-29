@@ -41,7 +41,9 @@ def read_many(paths, label_field: str | None = None) -> Cloud:
     if len(clouds) == 1:
         return clouds[0]
     origin = np.min([c.origin for c in clouds], axis=0)
-    pts = np.vstack([(c.points.astype(np.float64) + (c.origin - origin)).astype(np.float32) for c in clouds])
+    pts = np.vstack(
+        [(c.points.astype(np.float64) + (c.origin - origin)).astype(np.float32) for c in clouds]
+    )
     labels = None
     if all(c.labels is not None for c in clouds):
         labels = np.concatenate([c.labels for c in clouds])
@@ -66,7 +68,12 @@ def voxel_downsample(points: np.ndarray, size: float) -> tuple[np.ndarray, np.nd
 
 
 def write_las(
-    path, points: np.ndarray, origin: np.ndarray, classification: np.ndarray, crs=None, truth=None,
+    path,
+    points: np.ndarray,
+    origin: np.ndarray,
+    classification: np.ndarray,
+    crs=None,
+    truth=None,
     extra: dict[str, np.ndarray] | None = None,
 ):
     """Write a classified cloud; `truth` (our class codes, -1 = none) goes in an extra field,
@@ -95,6 +102,16 @@ def read_classified(path) -> tuple[Cloud, np.ndarray]:
     """Read a cloud written by write_las: (cloud with our truth codes or None, classification)."""
     las = laspy.read(path)
     origin = np.array(las.header.offsets, dtype=np.float64)
-    pts = np.column_stack([np.asarray(las.x) - origin[0], np.asarray(las.y) - origin[1], np.asarray(las.z) - origin[2]]).astype(np.float32)
-    truth = np.asarray(las.truth).astype(np.int16) if "truth" in las.point_format.dimension_names else None
+    pts = np.column_stack(
+        [
+            np.asarray(las.x) - origin[0],
+            np.asarray(las.y) - origin[1],
+            np.asarray(las.z) - origin[2],
+        ]
+    ).astype(np.float32)
+    truth = (
+        np.asarray(las.truth).astype(np.int16)
+        if "truth" in las.point_format.dimension_names
+        else None
+    )
     return Cloud(pts, origin, truth), np.asarray(las.classification).astype(np.uint8)

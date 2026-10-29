@@ -47,7 +47,9 @@ def describe(c: Conductor) -> dict:
         "rmse_z_m": round(c.rmse_z, 3),
         "rmse_xy_m": round(c.rmse_xy, 3),
         "outliers_dropped": c.outliers,
-        "min_ground_clearance_m": None if c.min_ground_clearance is None else round(c.min_ground_clearance, 2),
+        "min_ground_clearance_m": None
+        if c.min_ground_clearance is None
+        else round(c.min_ground_clearance, 2),
     }
 
 
@@ -71,16 +73,18 @@ def compare(pred: list[Conductor], truth: list[Conductor]) -> list[dict]:
             out.append({"span": p.span_id, "conductor": p.id, "match": None})
             continue
         _, t, dz, lateral = best
-        out.append({
-            "span": p.span_id,
-            "conductor": p.id,
-            "match": [t.span_id, t.id],
-            "max_abs_dz_m": round(float(np.max(np.abs(dz))), 3),
-            "mean_abs_dz_m": round(float(np.mean(np.abs(dz))), 3),
-            "max_lateral_m": round(float(np.max(lateral)), 3),
-            "sag_diff_m": None if p.sag is None or t.sag is None else round(p.sag - t.sag, 3),
-            "c_diff_pct": round(100 * (p.c - t.c) / t.c, 1),
-        })
+        out.append(
+            {
+                "span": p.span_id,
+                "conductor": p.id,
+                "match": [t.span_id, t.id],
+                "max_abs_dz_m": round(float(np.max(np.abs(dz))), 3),
+                "mean_abs_dz_m": round(float(np.mean(np.abs(dz))), 3),
+                "max_lateral_m": round(float(np.max(lateral)), 3),
+                "sag_diff_m": None if p.sag is None or t.sag is None else round(p.sag - t.sag, 3),
+                "c_diff_pct": round(100 * (p.c - t.c) / t.c, 1),
+            }
+        )
     return out
 
 
@@ -103,8 +107,14 @@ def plot(points, towers: list[Tower], spans, conds: list[Conductor], prefix: str
             m = c.sample(0.5)
             uu = (m[:, :2] - c.origin) @ c.axis
             ax.plot(uu, m[:, 2], color="black", lw=0.8)
-            ax.annotate(f"{c.id}: rmse {100 * c.rmse_z:.1f} cm", (uu[-1], m[-1, 2]), fontsize=7, xytext=(4, 0), textcoords="offset points")
-        span = spans[sid]
+            ax.annotate(
+                f"{c.id}: rmse {100 * c.rmse_z:.1f} cm",
+                (uu[-1], m[-1, 2]),
+                fontsize=7,
+                xytext=(4, 0),
+                textcoords="offset points",
+            )
+        span = next(s for s in spans if s.id == sid)  # ids, not positions: dropped spans leave gaps
         kind = "full span" if span.full else "partial span (runs off the tile)"
         ax.set_title(f"{title} span {sid}: {kind}, {span.length:.0f} m", fontsize=10)
         ax.set_ylabel("z (m)")
@@ -124,7 +134,14 @@ def plot(points, towers: list[Tower], spans, conds: list[Conductor], prefix: str
     for s in spans:
         ax.plot([s.a[0], s.b[0]], [s.a[1], s.b[1]], ls=":", color="gray", lw=0.8)
         mid = (s.a + s.b) / 2
-        ax.annotate(f"span {s.id}", mid, xytext=(8, -8), textcoords="offset points", fontsize=8, color="gray")
+        ax.annotate(
+            f"span {s.id}",
+            mid,
+            xytext=(8, -8),
+            textcoords="offset points",
+            fontsize=8,
+            color="gray",
+        )
     ax.set_aspect("equal")
     ax.set_title(f"{title}: towers, spans and fitted conductors (plan)")
     fig.tight_layout()
@@ -146,22 +163,42 @@ def main(argv=None):
     cloud, labels = read_classified(args.input)
     pts = cloud.points
     towers, spans, conds, rejected = model(pts, labels, labels == WIRE)
-    print(f"{name}: {len(towers)} towers, {len(spans)} spans, {len(conds)} conductors, {len(rejected)} clusters rejected")
+    print(
+        f"{name}: {len(towers)} towers, {len(spans)} spans, {len(conds)} conductors, "
+        f"{len(rejected)} clusters rejected"
+    )
     for t in towers:
-        print(f"  tower {t.id}: xy ({t.xy[0]:.1f}, {t.xy[1]:.1f}), top z {t.top_z:.1f}, {t.n_points} pts")
+        print(
+            f"  tower {t.id}: xy ({t.xy[0]:.1f}, {t.xy[1]:.1f}), "
+            f"top z {t.top_z:.1f}, {t.n_points} pts"
+        )
     rows = [describe(c) for c in conds]
     for r in rows:
         print("  ", r)
 
     report = {
         "tile": name,
-        "towers": [{"id": t.id, "x": float(t.xy[0] + cloud.origin[0]), "y": float(t.xy[1] + cloud.origin[1]), "top_z": float(t.top_z + cloud.origin[2])} for t in towers],
+        "towers": [
+            {
+                "id": t.id,
+                "x": float(t.xy[0] + cloud.origin[0]),
+                "y": float(t.xy[1] + cloud.origin[1]),
+                "top_z": float(t.top_z + cloud.origin[2]),
+            }
+            for t in towers
+        ],
         "spans": [
             {
-                "id": s.id, "length_m": round(s.length, 1), "full": s.full,
-                "tower_a": s.tower_a, "tower_b": s.tower_b, "wire_points": int(len(s.idx)),
+                "id": s.id,
+                "length_m": round(s.length, 1),
+                "full": s.full,
+                "tower_a": s.tower_a,
+                "tower_b": s.tower_b,
+                "wire_points": int(len(s.idx)),
                 # Wire points left out of every conductor (too sparse to cluster or fit).
-                "unmodelled_points": int(len(s.idx) - sum(len(c.idx) for c in conds if c.span_id == s.id)),
+                "unmodelled_points": int(
+                    len(s.idx) - sum(len(c.idx) for c in conds if c.span_id == s.id)
+                ),
             }
             for s in spans
         ],

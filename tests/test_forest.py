@@ -4,7 +4,7 @@ import numpy as np
 
 from clearance.catenary import catenary_z, fit_spans
 from clearance.classes import PYLON, VEGETATION, WIRE
-from clearance.spans import Span, build_spans, find_towers, towers_from_wires
+from clearance.spans import Span, find_towers, towers_from_wires
 from clearance.synthetic import make_scene
 
 
@@ -34,7 +34,13 @@ def test_bridged_conductors_are_split():
     low = np.column_stack([u, np.zeros_like(u), catenary_z(u, 40.0, 100.0, 1200.0)])
     high = low + np.array([0.0, 0.0, 1.0])
     # Stray points bridging the two every 20 m (0.4 m apart: joined at eps 0.5, not 0.25).
-    bridge = np.array([[x, 0.0, catenary_z(x, 40.0, 100.0, 1200.0) + dz] for x in range(10, 200, 20) for dz in (0.4, 0.8)])
+    bridge = np.array(
+        [
+            [x, 0.0, catenary_z(x, 40.0, 100.0, 1200.0) + dz]
+            for x in range(10, 200, 20)
+            for dz in (0.4, 0.8)
+        ]
+    )
     pts = np.vstack([low, high, bridge]) + rng.normal(0, 0.02, (len(low) * 2 + len(bridge), 3))
     span = Span(0, np.array([0.0, 0.0]), np.array([200.0, 0.0]), 0, 1, np.arange(len(pts)))
     conds, rejected = fit_spans(pts.astype(np.float32), np.arange(len(pts)), [span])

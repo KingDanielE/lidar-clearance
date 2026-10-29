@@ -80,13 +80,22 @@ def _kinks(s: np.ndarray, z: np.ndarray, step: float = 1.0, window: float = 15.0
         # Both sides nearly full: a kink measured on a few metres at the end of the data
         # (a tile edge) fired on a tree at wire height there.
         if left.sum() >= 0.8 * window / step and right.sum() >= 0.8 * window / step:
-            drop[i] = np.polyfit(centre[left], env[left], 1)[0] - np.polyfit(centre[right], env[right], 1)[0]
+            drop[i] = (
+                np.polyfit(centre[left], env[left], 1)[0]
+                - np.polyfit(centre[right], env[right], 1)[0]
+            )
     return centre, drop
 
 
 def towers_from_wires(
-    points, labels, min_kink: float = 0.03, min_steel: int = 300, column_r: float = 2.5,
-    slide: float = 8.0, separation: float = 50.0, wire_mask=None,
+    points,
+    labels,
+    min_kink: float = 0.03,
+    min_steel: int = 300,
+    column_r: float = 2.5,
+    slide: float = 8.0,
+    separation: float = 50.0,
+    wire_mask=None,
 ) -> list[Tower]:
     """Towers the pylon classification missed (in forest a tower is fused with the canopy).
 
@@ -128,7 +137,10 @@ def towers_from_wires(
             break
         if any(abs(centre[i] - f[0]) < separation for f in found):
             continue
-        best = max((column(centre[i] + d) + (centre[i] + d,) for d in np.arange(-slide, slide + 1, 1.0)), key=lambda r: r[0])
+        best = max(
+            (column(centre[i] + d) + (centre[i] + d,) for d in np.arange(-slide, slide + 1, 1.0)),
+            key=lambda r: r[0],
+        )
         n, xy, sk = best
         if n >= min_steel:
             found.append((sk, xy, n))
@@ -162,7 +174,10 @@ def build_spans(wire_xy: np.ndarray, towers: list[Tower], min_end_points: int = 
 
     if not nodes:
         lo, hi = np.percentile(s, [0.5, 99.5])
-        nodes = [(wire_xy[np.argmin(np.abs(s - lo))], None), (wire_xy[np.argmin(np.abs(s - hi))], None)]
+        nodes = [
+            (wire_xy[np.argmin(np.abs(s - lo))], None),
+            (wire_xy[np.argmin(np.abs(s - hi))], None),
+        ]
     else:
         # Extend to the wire ends beyond the first and last towers.
         s_first, s_last = float(order[0].xy @ axis), float(order[-1].xy @ axis)

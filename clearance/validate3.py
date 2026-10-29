@@ -28,7 +28,9 @@ class Run:
 
 def _pr(tp: int, n_pred: int, n_truth: int) -> dict:
     return {
-        "predicted": n_pred, "truth": n_truth, "matched": tp,
+        "predicted": n_pred,
+        "truth": n_truth,
+        "matched": tp,
         "precision": round(tp / n_pred, 3) if n_pred else None,
         "recall": round(tp / n_truth, 3) if n_truth else None,
     }
@@ -60,10 +62,20 @@ def compare(pred: Run, truth: Run, rules: Rules, tree_match_m: float = 2.0) -> d
     zp = {i for i, _ in pairs}
     zt = {j for _, j in pairs}
     out["zones"] = {
-        "predicted_zones": _pr(len(zp), len(pz), len(tz)) | {"recall": round(len(zt) / len(tz), 3) if tz else None},
+        "predicted_zones": _pr(len(zp), len(pz), len(tz))
+        | {"recall": round(len(zt) / len(tz), 3) if tz else None},
         "same_tier": sum(pred.zones[i]["tier"] == truth.zones[j]["tier"] for i, j in pairs),
         "pairs": len(pairs),
-        "max_abs_clearance_diff_m": round(max((abs(pred.zones[i]["min_clearance_m"] - truth.zones[j]["min_clearance_m"]) for i, j in pairs), default=0.0), 2),
+        "max_abs_clearance_diff_m": round(
+            max(
+                (
+                    abs(pred.zones[i]["min_clearance_m"] - truth.zones[j]["min_clearance_m"])
+                    for i, j in pairs
+                ),
+                default=0.0,
+            ),
+            2,
+        ),
     }
 
     # Hazard trees: non-safe treetops matched within tree_match_m in plan.
@@ -72,8 +84,10 @@ def compare(pred: Run, truth: Run, rules: Rules, tree_match_m: float = 2.0) -> d
     if len(p) and len(t):
         dp, _ = cKDTree(t).query(p)
         dt, _ = cKDTree(p).query(t)
-        out["hazard_trees"] = {**_pr(int(np.sum(dp <= tree_match_m)), len(p), len(t)),
-                               "recall": round(float(np.mean(dt <= tree_match_m)), 3)}
+        out["hazard_trees"] = {
+            **_pr(int(np.sum(dp <= tree_match_m)), len(p), len(t)),
+            "recall": round(float(np.mean(dt <= tree_match_m)), 3),
+        }
     else:
         out["hazard_trees"] = _pr(0, len(p), len(t))
     return out

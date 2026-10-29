@@ -62,8 +62,7 @@ def _groups(comp: np.ndarray):
     """Yield (component id, positions into comp) for each component."""
     order = np.argsort(comp, kind="stable")
     ids, starts = np.unique(comp[order], return_index=True)
-    for cid, chunk in zip(ids, np.split(order, starts[1:])):
-        yield cid, chunk
+    yield from zip(ids, np.split(order, starts[1:]))
 
 
 def _xy_axis(xy: np.ndarray) -> np.ndarray:
@@ -172,7 +171,9 @@ def find_pylons(points, hag, f: Features, ground, wire, p: Params):
             continue
         pylon[core] = True
         rest = sel[far]
-        extra_wire[rest[(f.linearity[rest] > p.wire_grow_linearity) & (f.dir_z[rest] < p.wire_max_dir_z)]] = True
+        extra_wire[
+            rest[(f.linearity[rest] > p.wire_grow_linearity) & (f.dir_z[rest] < p.wire_max_dir_z)]
+        ] = True
     return pylon, extra_wire
 
 

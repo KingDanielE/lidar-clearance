@@ -6,7 +6,11 @@ from clearance.synthetic import tree
 
 
 def _flat_dtm():
-    return pmf_dtm(np.array([[x, y, 0.0] for x in range(-40, 41, 2) for y in range(-40, 41, 2)], dtype=np.float32))
+    return pmf_dtm(
+        np.array(
+            [[x, y, 0.0] for x in range(-40, 41, 2) for y in range(-40, 41, 2)], dtype=np.float32
+        )
+    )
 
 
 def test_crown_radius_of_a_synthetic_tree():

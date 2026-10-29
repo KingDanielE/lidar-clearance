@@ -68,7 +68,11 @@ def split_conductors(points: np.ndarray, span: Span, eps: float = 0.5, min_sampl
     feats = np.column_stack([v, p[:, 2] - ref])
     lab = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(feats)
     groups = [span.idx[lab == k] for k in np.unique(lab) if k >= 0]
-    keys = [(round(float(np.median(feats[lab == k, 0])), 1), float(np.median(feats[lab == k, 1]))) for k in np.unique(lab) if k >= 0]
+    keys = [
+        (round(float(np.median(feats[lab == k, 0])), 1), float(np.median(feats[lab == k, 1])))
+        for k in np.unique(lab)
+        if k >= 0
+    ]
     return [g for _, g in sorted(zip(keys, groups), key=lambda kg: kg[0])]
 
 
@@ -93,14 +97,18 @@ def fit(u: np.ndarray, z: np.ndarray) -> tuple[float, float, float]:
 
     # Divergence on junk clusters shows up as non-finite parameters, caught by validate().
     with np.errstate(all="ignore"):
-        r = least_squares(
-            resid,
-            x0,
-            loss="soft_l1",
-            f_scale=0.1,  # residuals beyond ~10 cm count linearly: stray points don't drag it
-            bounds=([-np.inf, -np.inf, 20.0], [np.inf, np.inf, 1e5]),
-            x_scale=[10.0, 50.0, 500.0],
-        )
+        try:
+            r = least_squares(
+                resid,
+                x0,
+                loss="soft_l1",
+                f_scale=0.1,  # residuals beyond ~10 cm count linearly: stray points don't drag it
+                bounds=([-np.inf, -np.inf, 20.0], [np.inf, np.inf, 1e5]),
+                x_scale=[10.0, 50.0, 500.0],
+            )
+        except ValueError:
+            # cosh overflowed in the Jacobian (t4z1: u0 ran off on a nearly straight cluster).
+            return (np.nan, np.nan, np.nan)
     return tuple(float(v) for v in r.x)
 
 
@@ -110,7 +118,12 @@ def _rms(res: np.ndarray) -> float:
 
 
 def fit_conductor(
-    points: np.ndarray, idx: np.ndarray, span: Span, cid: int, ground_tree=None, ground_z=None,
+    points: np.ndarray,
+    idx: np.ndarray,
+    span: Span,
+    cid: int,
+    ground_tree=None,
+    ground_z=None,
     tower_reach: float = 8.0,
 ) -> Conductor:
     p = points[idx]
@@ -149,12 +162,21 @@ def fit_conductor(
     at_b = span.tower_b is not None and u.max() >= end - tower_reach
     u_min = 0.0 if at_a else float(u.min())
     u_max = end if at_b else float(u.max())
-    full = bool(at_a and at_b)
+    full = bool(at_a and at_b and end > 1.0)  # not a fragment lying across the span
     bins = np.arange(np.floor(u_min), np.ceil(u_max) + 1)
     coverage = float(np.mean(np.histogram(u, bins=bins)[0] > 0)) if len(bins) > 1 else 0.0
 
     cond = Conductor(
-        span.id, cid, idx, origin, axis, z0, u0, c, u_min, u_max,
+        span.id,
+        cid,
+        idx,
+        origin,
+        axis,
+        z0,
+        u0,
+        c,
+        u_min,
+        u_max,
         rmse_z=_rms(res),
         rmse_xy=float(np.std(lateral)),
         coverage=coverage,
@@ -193,12 +215,22 @@ def _near_towers(points, span: Span, margin: float) -> np.ndarray:
 
 
 def validate(
-    c: Conductor, min_points: int, min_coverage: float, min_extent: float, max_rmse: float, span: Span | None = None,
+    c: Conductor,
+    min_points: int,
+    min_coverage: float,
+    min_extent: float,
+    max_rmse: float,
+    span: Span | None = None,
 ) -> str | None:
     if not np.all(np.isfinite([c.z0, c.u0, c.c, c.rmse_z])):
         return "fit did not converge"
     # Short spans (15-30 m at junctions) carry fewer points: 3 per metre, capped.
     need = min(min_points, int(3 * (c.u_max - c.u_min)))
+    if span is not None and span.tower_a is None and span.tower_b is None:
+        # The per-metre allowance is for sparse stretches of a wire anchored at a tower. A
+        # piece with no tower needs the full count (t4z1: 64- and 43-point scraps of canopy
+        # fitted c = 94 km and 48 m; real tower-less pieces had 219-318 points).
+        need = min_points
     if len(c.idx) < need:
         return f"only {len(c.idx)} points"
     if c.u_max - c.u_min < min_extent:
@@ -210,11 +242,42 @@ def validate(
     if c.rmse_z > max_rmse:
         # Real conductors fit to a few cm; this is not a hanging wire.
         return f"rmse {100 * c.rmse_z:.0f} cm"
-    if span is not None and span.tower_a is not None and not (c.at_tower_a or c.at_tower_b) and c.u_max - c.u_min < 30.0:
+    if (
+        span is not None
+        and span.tower_a is not None
+        and not (c.at_tower_a or c.at_tower_b)
+        and c.u_max - c.u_min < 30.0
+    ):
         # Wire leaving a tower starts at it. A short piece in a tower's span that does not
         # reach the tower was a mix of jumper, vegetation and unlabelled points (t1z6a).
         return "short piece detached from its tower"
     return None
+
+
+def _split_sideways(
+    points: np.ndarray, g: np.ndarray, c: Conductor, tol: float = 0.3
+) -> list[np.ndarray]:
+    """Take out the best-supported straight wire in plan; the rest is returned unsplit.
+
+    The wires mixed into one conductor may be parallel or diverge toward different towers,
+    so it is a line in (along, lateral), found by RANSAC; stray bridging points stay with
+    the rest, which fit_group clusters and fits again.
+    """
+    rel = points[g, :2] - c.origin
+    u, v = rel @ c.axis, rel @ np.array([-c.axis[1], c.axis[0]])
+    rng = np.random.default_rng(0)
+    best = None
+    for _ in range(300):
+        i, j = rng.choice(len(g), 2, replace=False)
+        if abs(u[j] - u[i]) < 5.0:
+            continue
+        slope = (v[j] - v[i]) / (u[j] - u[i])
+        on = np.abs(v - (v[i] + slope * (u - u[i]))) < tol
+        if best is None or on.sum() > best.sum():
+            best = on
+    if best is None or best.sum() < 10 or best.all():
+        return [g]
+    return [g[best], g[~best]]
 
 
 def fit_spans(
@@ -227,6 +290,7 @@ def fit_spans(
     min_coverage: float = 0.5,
     min_extent: float = 10.0,
     max_rmse: float = 0.25,
+    max_rmse_xy: float = 0.3,
 ):
     """Fit every conductor of every span. `wire_idx` maps span.idx into `points`.
 
@@ -241,16 +305,43 @@ def fit_spans(
         idx = wire_idx[span.idx]
         idx = idx[~_near_towers(points[idx], span, tower_margin)]
         local = Span(span.id, span.a, span.b, span.tower_a, span.tower_b, idx)
+
         def fit_group(g, eps):
-            c = fit_conductor(points, g, local, 0, ground_tree, ground_z, tower_reach=tower_margin + 5.0)
+            c = fit_conductor(
+                points, g, local, 0, ground_tree, ground_z, tower_reach=tower_margin + 5.0
+            )
             c.rejected = validate(c, min_points, min_coverage, min_extent, max_rmse, local)
             # Two conductors bridged by stray points fail on RMSE: split tighter and retry.
-            if c.rejected and c.rejected.startswith("rmse") and len(g) >= 2 * min_points and eps > 0.15:
+            if (
+                c.rejected
+                and c.rejected.startswith("rmse")
+                and len(g) >= 2 * min_points
+                and eps > 0.15
+            ):
                 sub = Span(local.id, local.a, local.b, local.tower_a, local.tower_b, g)
                 parts = [p for p in split_conductors(points, sub, eps=eps / 2) if len(p) >= 10]
                 if len(parts) > 1:
                     return [r for p in parts for r in fit_group(p, eps / 2)]
-            return [c]
+            # The residual trim is vertical: a parallel phase at the same height, metres to
+            # the side, passes it and the curve fits both (t2z5: two wires 9 m apart, one
+            # conductor fitted to 6 cm). Real conductors are 2-5 cm wide in plan.
+            if c.rejected is None and c.rmse_xy > max_rmse_xy:
+                parts = _split_sideways(points, g, c)
+                if len(parts) > 1:
+                    rest = Span(local.id, local.a, local.b, local.tower_a, local.tower_b, parts[1])
+                    others = [p for p in split_conductors(points, rest, eps=eps) if len(p) >= 10]
+                    return fit_group(parts[0], eps) + [r for p in others for r in fit_group(p, eps)]
+            out = [c]
+            # The residual trim keeps one conductor; when it drops a large share of the
+            # cluster, the rest is another conductor merged into it (t2z5: 4,969 of 10,416
+            # points, silently lost, while the kept one fitted to 6 cm). Fit them in turn.
+            dropped = np.setdiff1d(g, c.idx)
+            if c.rejected is None and len(dropped) >= max(min_points, 0.2 * len(g)):
+                sub = Span(local.id, local.a, local.b, local.tower_a, local.tower_b, dropped)
+                for p in split_conductors(points, sub, eps=eps):
+                    if len(p) >= 10:
+                        out += fit_group(p, eps)
+            return out
 
         groups = [g for g in split_conductors(points, local) if len(g) >= 10]
         fitted = [c for g in groups for c in fit_group(g, 0.5)]

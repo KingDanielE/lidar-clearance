@@ -20,7 +20,13 @@ from .ground import Raster
 STRIKE, FLASHOVER, SAFE = "strike", "within_mvcd", "safe"
 
 
-def tree_tops(veg: np.ndarray, hag: np.ndarray, cell: float = 0.5, min_height: float = 3.0, window_m: float = 3.0):
+def tree_tops(
+    veg: np.ndarray,
+    hag: np.ndarray,
+    cell: float = 0.5,
+    min_height: float = 3.0,
+    window_m: float = 3.0,
+):
     """(xy (n, 2), height (n,)) of treetops from vegetation points and their HAG."""
     if len(veg) == 0:
         return np.zeros((0, 2)), np.zeros(0)
@@ -39,7 +45,9 @@ def tree_tops(veg: np.ndarray, hag: np.ndarray, cell: float = 0.5, min_height: f
     return xy, h
 
 
-def crowns(veg: np.ndarray, hag: np.ndarray, xy: np.ndarray, height: np.ndarray, min_base_points: int = 10):
+def crowns(
+    veg: np.ndarray, hag: np.ndarray, xy: np.ndarray, height: np.ndarray, min_base_points: int = 10
+):
     """Per tree: (crown radius (n,), base xy (n, 2)). Points go to the nearest treetop in
     plan, within 0.4 * height + 2 m (a crown is rarely wider than that)."""
     n = len(xy)
@@ -66,8 +74,15 @@ def crowns(veg: np.ndarray, hag: np.ndarray, xy: np.ndarray, height: np.ndarray,
     return radius, base
 
 
-def fall_in(xy: np.ndarray, height: np.ndarray, dtm: Raster, wire_samples: np.ndarray, mvcd: float,
-            base_xy: np.ndarray | None = None, crown_radius: np.ndarray | None = None):
+def fall_in(
+    xy: np.ndarray,
+    height: np.ndarray,
+    dtm: Raster,
+    wire_samples: np.ndarray,
+    mvcd: float,
+    base_xy: np.ndarray | None = None,
+    crown_radius: np.ndarray | None = None,
+):
     """Per tree: base z, distance from its base to the nearest conductor sample, reach
     margin (distance - reach), status. Without base_xy / crown_radius: a vertical stick."""
     if len(xy) == 0:

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lidar-clearance"
+version = "0.1.0"
+description = "Tree-to-line clearance for overhead power lines from airborne LiDAR"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.13",
+    "laspy>=2.5",
+    "matplotlib>=3.8",
+    "scikit-learn>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+clearance-phase1 = "scripts.run_phase1:main"
+clearance-phase2 = "scripts.run_phase2:main"
+clearance-phase3 = "scripts.run_phase3:main"
+clearance-batch = "scripts.run_batch:main"
+clearance-screen = "scripts.screen_zones:main"
+
+[tool.setuptools]
+packages = ["clearance", "scripts"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["out", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# B023: nested fit helpers are called inside the loop that defines them. B905: zip of
+# arrays built together.
+ignore = ["B023", "B905"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

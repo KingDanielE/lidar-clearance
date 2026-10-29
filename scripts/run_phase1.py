@@ -1,7 +1,7 @@
 """Phase 1: classify a LiDAR tile into ground / vegetation / wires / pylons / buildings.
 
-    python -m scripts.run_phase1 --synthetic
-    python -m scripts.run_phase1 data/t5c2.las --truth-field ground_truth --truth-map gridnet
+python -m scripts.run_phase1 --synthetic
+python -m scripts.run_phase1 data/t5c2.las --truth-field ground_truth --truth-map gridnet
 """
 
 import argparse
@@ -21,7 +21,9 @@ from clearance.synthetic import make_scene
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("input", nargs="*", help="LAS/LAZ file; several neighbouring tiles are joined into one")
+    ap.add_argument(
+        "input", nargs="*", help="LAS/LAZ file; several neighbouring tiles are joined into one"
+    )
     ap.add_argument("--synthetic", action="store_true", help="use a generated corridor")
     ap.add_argument("--truth-field", help="LAS field with ground-truth labels")
     ap.add_argument("--truth-map", choices=sorted(MAPPINGS), default="asprs")
@@ -59,9 +61,12 @@ def main(argv=None):
         "predicted_counts": counts,
         "timings_s": res.timings,
     }
-    md = [f"# Phase 1 classification: {name}\n", f"- points: {len(points):,}",
-          f"- voxels ({args.voxel} m): {len(res.vox_points):,}",
-          f"- timings (s): {res.timings}\n"]
+    md = [
+        f"# Phase 1 classification: {name}\n",
+        f"- points: {len(points):,}",
+        f"- voxels ({args.voxel} m): {len(res.vox_points):,}",
+        f"- timings (s): {res.timings}\n",
+    ]
     if truth is not None:
         s = scores(res.labels, truth)
         cm = confusion(res.labels, truth)
@@ -79,7 +84,12 @@ def main(argv=None):
         vox_truth = np.full(len(res.vox_points), -1, dtype=np.int16)
         vox_truth[res.inverse] = truth
     write_las(
-        out / f"{name}_classified_voxels.las", res.vox_points, origin, res.vox_labels, crs, vox_truth
+        out / f"{name}_classified_voxels.las",
+        res.vox_points,
+        origin,
+        res.vox_labels,
+        crs,
+        vox_truth,
     )
     files = plot_all(res.vox_points, res.vox_labels, str(out / name), title=name, truth=vox_truth)
     print("wrote", *files, sep="\n  ")
