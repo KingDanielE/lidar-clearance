@@ -28,7 +28,8 @@ flowchart LR
   trees that could fall into the line, and any wire it could not model (so the vegetation
   beside it is reported as not assessed rather than clear).
 
-How it works: [docs/method.md](docs/method.md). Every score: [docs/validation.md](docs/validation.md).
+Project page: **[lidar-clearance.vercel.app](https://lidar-clearance.vercel.app)**. How it works:
+[docs/method.md](docs/method.md). Every score: [docs/validation.md](docs/validation.md).
 
 ## Results at a glance
 

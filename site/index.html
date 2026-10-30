@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tree-to-line clearance from LiDAR</title>
+<meta name="description" content="How close is the vegetation to a power line, and will it still be clear on a hot day or in a strong wind? A rule- and physics-based pipeline from raw LiDAR, scored end to end against hand-labelled data.">
+<meta property="og:title" content="Tree-to-line clearance from LiDAR">
+<meta property="og:description" content="Classification, a catenary line model and Swiss LeV clearance scenarios from raw drone LiDAR, scored against hand labels.">
+<meta property="og:image" content="img/phase3_section_t1z8.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 9 Q16 21 29 9' fill='none' stroke='%232563eb' stroke-width='2.5'/%3E%3Cpath d='M16 30 L16 22 M10 26 Q16 12 22 26 Z' fill='%2316a34a'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f7f8f6;
+  --surface: #ffffff;
+  --ink: #15201a;
+  --muted: #56645b;
+  --line: #dfe4df;
+  --accent: #2563eb;
+  --accent-ink: #1d4ed8;
+  --veg: #16a34a;
+  --hot: #dc2626;
+  --ice: #7c3aed;
+  --wind: #2563eb;
+  --warn: #ea580c;
+  --code-bg: #eef1ee;
+  --radius: 14px;
+  --max: 1120px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1310;
+    --surface: #151d18;
+    --ink: #e8eee9;
+    --muted: #9aa89f;
+    --line: #26322b;
+    --accent: #60a5fa;
+    --accent-ink: #93c5fd;
+    --veg: #4ade80;
+    --hot: #f87171;
+    --ice: #a78bfa;
+    --wind: #60a5fa;
+    --warn: #fb923c;
+    --code-bg: #1b251f;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+a { color: var(--accent-ink); }
+code, pre { font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace; font-size: 0.9em; }
+.wrap { max-width: var(--max); margin: 0 auto; padding: 0 16px; }
+
+header.top {
+  position: sticky; top: 0; z-index: 5;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+header.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; gap: 16px; }
+.brand { font-weight: 650; letter-spacing: -0.01em; text-decoration: none; color: var(--ink); white-space: nowrap; }
+nav.links { display: flex; gap: 20px; font-size: 14px; }
+nav.links a { color: var(--muted); text-decoration: none; }
+nav.links a:hover { color: var(--ink); }
+@media (max-width: 720px) { nav.links .opt { display: none; } }
+
+.hero { padding: 56px 0 32px; }
+.hero-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 40px; align-items: center; }
+@media (max-width: 880px) { .hero-grid { grid-template-columns: 1fr; gap: 24px; } }
+.eyebrow { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--veg); margin: 0 0 12px; }
+h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.05; letter-spacing: -0.025em; margin: 0 0 18px; }
+.lede { font-size: 18px; color: var(--muted); margin: 0 0 26px; max-width: 34em; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 16px; border-radius: 10px; font-weight: 600; font-size: 15px;
+  text-decoration: none; border: 1px solid var(--line); color: var(--ink); background: var(--surface);
+}
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.btn svg { width: 18px; height: 18px; }
+
+.hero-fig { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+.hero-fig svg { width: 100%; height: auto; display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); padding: 6px 4px 0; }
+.legend span::before { content: ""; display: inline-block; width: 18px; height: 0; border-top: 2px solid currentColor; vertical-align: middle; margin-right: 6px; }
+.legend .s { color: var(--ink); } .legend .h { color: var(--hot); } .legend .w { color: var(--wind); }
+.legend .h::before, .legend .w::before { border-top-style: dashed; }
+.legend span { color: var(--muted); }
+.legend .s::before { border-color: var(--ink); } .legend .h::before { border-color: var(--hot); } .legend .w::before { border-color: var(--wind); }
+
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 40px 0 0; }
+@media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+.stat b { display: block; font-size: 26px; letter-spacing: -0.02em; line-height: 1.15; }
+.stat span { font-size: 13px; color: var(--muted); }
+
+section { padding: 56px 0; border-top: 1px solid var(--line); }
+h2 { font-size: clamp(24px, 3.2vw, 32px); letter-spacing: -0.02em; line-height: 1.15; margin: 0 0 10px; }
+.sub { color: var(--muted); margin: 0 0 28px; max-width: 46em; }
+h3 { font-size: 18px; margin: 0 0 6px; }
+
+.phases { display: grid; gap: 20px; }
+.phase { display: grid; grid-template-columns: 1fr 1.3fr; gap: 28px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
+@media (max-width: 880px) { .phase { grid-template-columns: 1fr; } }
+.tag { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-ink); margin-bottom: 6px; }
+.phase p, .phase li { color: var(--muted); font-size: 15px; }
+.phase ul { padding-left: 18px; margin: 8px 0 0; }
+.phase li { margin: 4px 0; }
+figure { margin: 0; }
+figure img { width: 100%; height: auto; display: block; border-radius: 10px; background: #fff; border: 1px solid var(--line); }
+figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+thead th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 600; background: color-mix(in srgb, var(--surface) 85%, var(--line)); }
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { font-variant-numeric: tabular-nums; }
+tbody th { font-weight: 600; }
+
+.rules { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 28px; }
+@media (max-width: 880px) { .rules { grid-template-columns: 1fr; } }
+.rule { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; border-top: 3px solid var(--c); }
+.rule b { font-size: 24px; display: block; letter-spacing: -0.02em; }
+.rule .k { font-size: 13px; color: var(--muted); }
+.rule p { font-size: 14px; color: var(--muted); margin: 8px 0 0; }
+
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.two.wide-left { grid-template-columns: 2fr 1fr; }
+.tall img { max-height: 620px; width: auto; max-width: 100%; margin: 0 auto; }
+@media (max-width: 880px) { .two, .two.wide-left { grid-template-columns: 1fr; } .tall img { max-height: 520px; } }
+
+.story { display: grid; gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
+.card p { margin: 6px 0 0; color: var(--muted); font-size: 15px; }
+.badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: 2px; }
+.badge.pass { background: color-mix(in srgb, var(--veg) 18%, transparent); color: var(--veg); }
+.badge.fail { background: color-mix(in srgb, var(--hot) 18%, transparent); color: var(--hot); }
+.notes { color: var(--muted); font-size: 14px; padding-left: 18px; margin: 18px 0 0; }
+.notes li { margin: 6px 0; }
+
+pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; line-height: 1.5; margin: 0 0 14px; }
+
+footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--muted); font-size: 14px; }
+footer p { margin: 6px 0; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#">lidar-clearance</a>
+    <nav class="links">
+      <a class="opt" href="#pipeline">Pipeline</a>
+      <a class="opt" href="#rules">Scenarios</a>
+      <a href="#results">Results</a>
+      <a href="https://github.com/KingDanielE/lidar-clearance">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="hero">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <p class="eyebrow">Vegetation management for power lines</p>
+        <h1>Tree-to-line clearance from LiDAR</h1>
+        <p class="lede">How close is the vegetation to a power line, and will it still be clear on a hot day or in a strong wind? This pipeline answers that from a raw point cloud, and every number is scored against hand-labelled data.</p>
+        <div class="cta">
+          <a class="btn primary" href="https://github.com/KingDanielE/lidar-clearance">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.72 1.23 1.88.87 2.34.67.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+            View on GitHub
+          </a>
+          <a class="btn" href="https://github.com/KingDanielE/lidar-clearance/blob/master/docs/method.md">Method</a>
+          <a class="btn" href="https://github.com/KingDanielE/lidar-clearance/blob/master/docs/validation.md">Validation</a>
+        </div>
+      </div>
+      <div class="hero-fig" role="img" aria-label="A span between two towers: the conductor as surveyed, its hotter, lower position, and its wind-swung position, with a tree growing into the required clearance.">
+        <svg viewBox="0 0 560 320" xmlns="http://www.w3.org/2000/svg">
+          <!-- ground -->
+          <path d="M0 292 C120 286 220 300 320 294 S480 284 560 290 L560 320 L0 320 Z" fill="var(--line)"/>
+          <!-- towers -->
+          <g stroke="var(--muted)" stroke-width="2" fill="none" stroke-linejoin="round">
+            <path d="M52 292 L66 70 L80 292 M57 220 L75 220 M60 160 L72 160 M44 84 L88 84 M48 104 L84 104"/>
+            <path d="M480 292 L494 70 L508 292 M485 220 L503 220 M488 160 L500 160 M472 84 L516 84 M476 104 L512 104"/>
+          </g>
+          <!-- required clearance around the hot conductor -->
+          <path d="M66 84 Q280 262 494 84" fill="none" stroke="var(--hot)" stroke-opacity="0.13" stroke-width="58" stroke-linecap="butt"/>
+          <!-- trees: the middle one grows into the clearance -->
+          <g fill="var(--veg)">
+            <rect x="277" y="240" width="6" height="52" rx="2" opacity="0.8"/>
+            <path d="M280 174 C256 184 244 214 250 238 C256 258 304 258 310 238 C316 214 304 184 280 174 Z"/>
+            <path d="M190 262 C176 268 174 290 186 292 L202 292 C212 288 206 268 190 262 Z" opacity="0.7"/>
+            <path d="M390 246 C372 254 368 286 382 292 L402 292 C416 286 410 254 390 246 Z" opacity="0.75"/>
+          </g>
+          <!-- conductors: wind (side view of a 44 degree swing), as surveyed, hot -->
+          <path d="M66 84 Q280 194 494 84" fill="none" stroke="var(--wind)" stroke-width="2.2" stroke-dasharray="3 5"/>
+          <path d="M66 84 Q280 236 494 84" fill="none" stroke="var(--ink)" stroke-width="2.4"/>
+          <path d="M66 84 Q280 262 494 84" fill="none" stroke="var(--hot)" stroke-width="2.2" stroke-dasharray="7 5"/>
+          <!-- annotation -->
+          <path d="M308 206 L356 224" stroke="var(--hot)" stroke-width="1.2"/>
+          <text x="360" y="224" font-size="13" font-family="ui-sans-serif, system-ui, sans-serif" fill="var(--hot)" font-weight="600"><tspan x="360">inside 5.3 m</tspan><tspan x="360" dy="16">at 40 °C</tspan></text>
+        </svg>
+        <div class="legend"><span class="s">as surveyed</span><span class="h">hot (max sag)</span><span class="w">wind (blowout)</span></div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><b>7 tiles</b><span>389 M points of Swiss high-voltage lines</span></div>
+      <div class="stat"><b>34 of 34</b><span>encroachment zones found on a held-out forest tile, none false</span></div>
+      <div class="stat"><b>2–7 cm</b><span>conductor fit (vertical RMSE)</span></div>
+      <div class="stat"><b>0</b><span>trained models: rules and physics, plain NumPy and SciPy</span></div>
+    </div>
+  </div>
+</div>
+
+<section id="pipeline">
+  <div class="wrap">
+    <h2>Three phases, each checked against hand labels</h2>
+    <p class="sub">The input is a raw LAS point cloud. The output is a list of places where vegetation is, or will be, too close to a conductor: tiered, located and explained.</p>
+
+    <div class="phases">
+      <div class="phase">
+        <div>
+          <span class="tag">Phase 1</span>
+          <h3>Classify every point</h3>
+          <p>Ground, vegetation, wire, pylon and building, from geometry alone.</p>
+          <ul>
+            <li>Progressive morphological filter for the terrain, then height above ground.</li>
+            <li>Eigenvalue features (linearity, planarity, scattering) and the air gap below each point.</li>
+            <li>Rules on 0.15 m voxels: wires are thin, near-horizontal and hang over open air.</li>
+          </ul>
+        </div>
+        <figure>
+          <img src="img/phase1_profile_t5b6.png" width="2100" height="1350" loading="lazy" alt="Profile along the line: predicted classes above, hand labels below, nearly identical.">
+          <figcaption>Predicted classes (top) against the hand labels (bottom), along an alpine line.</figcaption>
+        </figure>
+      </div>
+
+      <div class="phase">
+        <div>
+          <span class="tag">Phase 2</span>
+          <h3>Model the line</h3>
+          <p>Towers and spans form a graph, so a tile can hold several lines and junctions.</p>
+          <ul>
+            <li>Towers from steel, from kinks and turns in the wires, and at line ends; a tower is kept only if a conductor hangs from it.</li>
+            <li>Conductors separated in each span's cross-section; wires merged by stray points are split again.</li>
+            <li>A catenary <code>z = z0 + c(cosh((u−u0)/c) − 1)</code> per conductor, robustly fitted and validated.</li>
+          </ul>
+        </div>
+        <div class="two">
+          <figure>
+            <img src="img/phase2_spans_t5b6.png" width="1820" height="1512" loading="lazy" alt="Fitted catenaries over the points of each conductor in a span.">
+            <figcaption>Catenaries fitted to a double circuit plus an earth wire.</figcaption>
+          </figure>
+          <figure>
+            <img src="img/graph_t2z5.png" width="710" height="1070" loading="lazy" alt="Plan view of a junction: six towers and fourteen spans.">
+            <figcaption>A junction: 6 towers, 14 spans, 48 conductors.</figcaption>
+          </figure>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div>
+          <span class="tag">Phase 3</span>
+          <h3>Measure clearance in every scenario</h3>
+          <p>Each conductor is carried from the survey to the worst cases with the change-of-state equation, then the 3D distance to every vegetation point is compared with the required distance.</p>
+          <ul>
+            <li>Tiered encroachment zones: violation, urgent, monitor (3-year growth).</li>
+            <li>Hazard trees: crown, lean and base, and whether a falling tree reaches a conductor.</li>
+            <li>Wire that could not be modelled is reported, with the vegetation beside it marked <em>not assessed</em>, never <em>clear</em>.</li>
+          </ul>
+        </div>
+        <figure>
+          <img src="img/phase3_profile_t1z8.png" width="1960" height="700" loading="lazy" alt="Vegetation along a forest line coloured by its worst clearance: red inside the required distance, orange close, yellow on the watch list.">
+          <figcaption>A forest line: red is inside the required distance, orange within 1.5 m of it, yellow on the 3-year watch list.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="rules">
+  <div class="wrap">
+    <h2>Swiss rules, worst-case conductors</h2>
+    <p class="sub">Defaults follow the Swiss Leitungsverordnung (LeV, SR 734.31) for a 380 kV line. The voltage, conductor and survey temperature are not in the data; all are parameters.</p>
+    <div class="rules">
+      <div class="rule" style="--c: var(--hot)"><span class="k">Hot · Art. 47</span><b>40 °C</b><p>Greatest sag. Trees must stay 1.5 m + 0.01 m/kV away: 5.3 m (Art. 35).</p></div>
+      <div class="rule" style="--c: var(--ice)"><span class="k">Ice · Art. 47</span><b>0 °C + 20 N/m</b><p>Snow and ice load per conductor, same 5.3 m distance.</p></div>
+      <div class="rule" style="--c: var(--wind)"><span class="k">Wind · Annex 4</span><b>500 N/m²</b><p>At 10 °C the conductor swings 44° sideways; 3.8 m to trees, by analogy with Art. 34.</p></div>
+    </div>
+    <div class="two wide-left">
+      <figure>
+        <img src="img/phase3_section_t1z8.png" width="1260" height="840" loading="lazy" alt="Cross-section: conductors as surveyed, hot, iced and swung by wind, with clearance circles; a crown comes within 0.22 m of a swung conductor.">
+        <figcaption>Cross-section at the worst zone of a forest line: swung by the wind, a conductor comes to 0.22 m of the tallest crowns.</figcaption>
+      </figure>
+      <figure class="tall">
+        <img src="img/plan_t4z1.png" width="560" height="1350" loading="lazy" alt="Plan view of a forest line with numbered encroachment zones and hazard trees.">
+        <figcaption>Encroachment zones and hazard trees along 900 m of forest line.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="results">
+  <div class="wrap">
+    <h2>Scored end to end</h2>
+    <p class="sub">The reference is a run built entirely from the dataset's hand labels: a conductor model fitted to the hand-labelled wire, and hand-labelled vegetation. Ours is compared with it zone by zone and point by point.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th></th><th>t1z8 · forest</th><th>t1z6a · forest</th><th>t2z5 · junction</th><th>t4z1 · forest</th><th>t5b6 · alpine</th></tr>
+        </thead>
+        <tbody>
+          <tr><th>Points</th><td class="num">51 M</td><td class="num">50 M</td><td class="num">67 M</td><td class="num">103 M</td><td class="num">36 M</td></tr>
+          <tr><th>Wires found (recall / IoU)</th><td class="num">99% / 0.82</td><td class="num">99% / 0.69</td><td class="num">99% / 0.81</td><td class="num">97% / 0.70</td><td class="num">97% / 0.79</td></tr>
+          <tr><th>Towers found (true)</th><td class="num">2 (2)</td><td class="num">3 (3)</td><td class="num">6 (6)</td><td class="num">4 (4)</td><td class="num">2 (2)</td></tr>
+          <tr><th>Closest vegetation, as surveyed (reference)</th><td class="num">2.80 m (2.80)</td><td class="num">1.17 m (1.17)</td><td class="num">1.21 m (1.21)</td><td class="num">3.65 m (3.65)</td><td class="num">8.39 m (8.39)</td></tr>
+          <tr><th>Zones precision / recall</th><td class="num"><b>100% / 100%</b></td><td class="num">100% / 98%</td><td class="num">99% / 100%</td><td class="num">100% / 97%</td><td class="num">100% / 100%</td></tr>
+          <tr><th>Matched zones in the same tier</th><td class="num">63 of 63</td><td class="num">43 of 43</td><td class="num">74 of 77</td><td class="num">62 of 62</td><td class="num">1 of 1</td></tr>
+          <tr><th>Flagged vegetation points (precision / recall)</th><td class="num">99.9% / 100%</td><td class="num">97% / 97%</td><td class="num">97% / 97%</td><td class="num">99.9% / 99.6%</td><td class="num">100% / 100%</td></tr>
+          <tr><th>Hazard trees (precision / recall)</th><td class="num">97% / 97%</td><td class="num">88% / 97%</td><td class="num">89% / 96%</td><td class="num">91% / 92%</td><td class="num">none exist</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="notes">
+      <li>t1z6a, t2z5 and t4z1 were used to find and fix problems, so they are not held out. At the t2z5 junction the reference itself misses some conductors.</li>
+      <li>Hazard-tree precision is lowest where many trees sit right on the 3.8 m threshold; recall stays at 92–97%.</li>
+    </ul>
+
+    <h3 style="margin-top:40px">Held-out tests, reported as they came out</h3>
+    <p class="sub" style="margin-bottom:16px">Each was run once on frozen code, before the tile had been looked at.</p>
+    <div class="story">
+      <div class="card">
+        <h3>t1z8, forest <span class="badge pass">passed</span></h3>
+        <p>34 of 34 encroachment zones found, none false, all in the same tier, clearance within 2 cm of the reference. Flagged points 99.9% / 100%, hazard trees 98% / 96%.</p>
+      </div>
+      <div class="card">
+        <h3>t4z1, forest, 103 M points <span class="badge fail">crashed</span></h3>
+        <p>Phase 1 found 97.5% of the wire, then Phase 2 crashed on a diverging fit, and the run gave no result. The fixes it led to (rejecting diverged fits, confirming towers by their conductors, stricter rules for tower-less pieces) removed 4 false towers and a false violation; the tile now matches the reference to 5 cm, but it no longer counts as held out.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="run">
+  <div class="wrap">
+    <h2>Run it</h2>
+    <p class="sub">Python 3.12. The data is GridNet-HD from Hugging Face (1.2–4.3 GB per tile).</p>
+<pre><code>git clone https://github.com/KingDanielE/lidar-clearance && cd lidar-clearance
+uv venv --python 3.12 .venv && uv pip install --python .venv -r requirements.txt -e .
+curl -L -C - -o data/t1z8.las https://huggingface.co/datasets/heig-vd-geo/GridNet-HD/resolve/main/t1z8/lidar/t1z8.las
+clearance-batch data/t1z8.las --truth-field ground_truth --truth-map gridnet</code></pre>
+    <p class="sub" style="margin:0">Outputs per tile: encroachment zones (CSV, GeoJSON), hazard trees, unmodelled wire, the classified cloud and the vegetation coloured by clearance (LAS), JSON reports and plots. Options: <code>--kv</code>, <code>--t-survey</code>, <code>--t-max</code>, <code>--wind-pa</code>.</p>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Code: MIT licence, <a href="https://github.com/KingDanielE/lidar-clearance">github.com/KingDanielE/lidar-clearance</a>.</p>
+    <p>Data: <a href="https://huggingface.co/datasets/heig-vd-geo/GridNet-HD">GridNet-HD</a> (HEIG-VD), CC BY 4.0; the figures are derived from it. Carreaud et al., <em>GridNet-HD: A High-Resolution Multi-Modal Dataset for LiDAR-Image Fusion on Power Line Infrastructure</em>, <a href="https://arxiv.org/abs/2601.13052">arXiv:2601.13052</a>, 2026.</p>
+  </div>
+</footer>
+</body>
+</html>
