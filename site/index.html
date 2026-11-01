@@ -180,6 +180,55 @@ footer li { margin: 0 0 10px; }
 footer a { color: var(--night-ink); text-decoration: none; }
 footer a:hover { color: #fff; }
 footer .legal { border-top: 1px solid var(--night-line); margin-top: 48px; padding-top: 24px; font-size: 13px; }
+
+/* demo */
+.demo { display: grid; grid-template-columns: 340px 1fr; gap: 24px; margin-top: 40px; align-items: start; }
+@media (max-width: 960px) { .demo { grid-template-columns: 1fr; } }
+.controls { background: var(--card); border: 1px solid var(--line); padding: 24px; }
+.controls h4 { font: 500 12px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--soft); margin: 0 0 12px; }
+.controls h4 + .ctl { margin-top: 0; }
+.controls .group + .group { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.ctl { margin-top: 14px; }
+.ctl label { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--ink); }
+.ctl output { font: 500 13px var(--mono); color: var(--green); white-space: nowrap; }
+.ctl input[type=range] { width: 100%; margin: 8px 0 0; accent-color: var(--green); }
+.ctl select { width: 100%; margin-top: 8px; padding: 8px 10px; font: 14px var(--body); border: 1px solid var(--line); background: var(--background); color: var(--ink); border-radius: 0; }
+.views { display: grid; gap: 16px; min-width: 0; }
+.view { background: var(--card); border: 1px solid var(--line); padding: 16px 18px 12px; }
+.view .vh { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.view .vh b { font: 600 15px var(--head); }
+.view .vh span { font: 500 12px var(--mono); color: var(--soft); }
+.view svg { width: 100%; height: auto; display: block; margin-top: 8px; }
+.verdict { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; background: var(--night); color: #fff; padding: 18px 20px; }
+.verdict .pill { font: 600 13px var(--mono); text-transform: uppercase; letter-spacing: 0.08em; padding: 6px 12px; color: #fff; }
+.verdict .pill.violation { background: var(--hot); }
+.verdict .pill.urgent { background: var(--orange); }
+.verdict .pill.monitor { background: #ca8a04; }
+.verdict .pill.clear { background: var(--green); }
+.verdict p { margin: 0; color: var(--night-ink); font-size: 15px; flex: 1; min-width: 220px; }
+.results-t { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 0; }
+.results-t th, .results-t td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: right; }
+.results-t th:first-child, .results-t td:first-child { text-align: left; }
+.results-t thead th { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); background: var(--surface); }
+.results-t tr.gov td { font-weight: 600; background: color-mix(in srgb, var(--green) 7%, transparent); }
+.results-t .neg { color: var(--hot); }
+.sw { display: inline-block; width: 18px; border-top: 2px solid; vertical-align: middle; margin-right: 8px; }
+.demo-note { font-size: 13.5px; color: var(--soft); margin: 14px 0 0; }
+
+/* contact */
+.contact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+@media (max-width: 900px) { .contact-grid { grid-template-columns: 1fr; gap: 32px; } }
+.contact-links { display: grid; gap: 12px; }
+.contact-links a { display: flex; justify-content: space-between; align-items: center; gap: 16px; background: var(--card); border: 1px solid var(--line); padding: 18px 20px; text-decoration: none; }
+.contact-links a:hover { border-color: var(--green); }
+.contact-links .k { font: 500 12px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--soft); }
+.contact-links .v { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; text-align: right; }
+.contact-links a.primary { background: var(--green); border-color: var(--green); }
+.contact-links a.primary .k { color: rgba(255,255,255,.8); }
+.contact-links a.primary .v { color: #fff; }
+.cv-facts { list-style: none; padding: 0; margin: 24px 0 0; }
+.cv-facts li { padding: 12px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 15.5px; }
+.cv-facts b { color: var(--ink); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -191,6 +240,8 @@ footer .legal { border-top: 1px solid var(--night-line); margin-top: 48px; paddi
       <a class="opt" href="#pipeline">Pipeline</a>
       <a class="opt" href="#rules">Scenarios</a>
       <a class="opt" href="#results">Results</a>
+      <a class="opt" href="#demo">Demo</a>
+      <a class="opt" href="#contact">CV</a>
       <a class="cta" href="https://github.com/KingDanielE/lidar-clearance">GitHub</a>
     </nav>
   </div>
@@ -348,6 +399,59 @@ footer .legal { border-top: 1px solid var(--night-line); margin-top: 48px; paddi
   </div>
 </section>
 
+<section class="surface" id="demo">
+  <div class="wrap">
+    <p class="eyebrow">Demo</p>
+    <h2>Change the weather.<br>Watch the clearance.</h2>
+    <p class="sub">One conductor over one tree, worked out in your browser with the same change-of-state equation the pipeline uses (<code>clearance/scenarios.py</code>): the conductor's tension at the survey comes from its sag, and is carried to the hot, iced and windy cases. Move the sliders.</p>
+
+    <div class="demo">
+      <form class="controls" id="demo-form" onsubmit="return false">
+        <div class="group">
+          <h4>The span</h4>
+          <div class="ctl"><label for="d-L">Span length <output id="o-L"></output></label><input type="range" id="d-L" min="120" max="400" step="5" value="250"></div>
+          <div class="ctl"><label for="d-sag">Sag at the survey (15 °C) <output id="o-sag"></output></label><input type="range" id="d-sag" min="2" max="12" step="0.1" value="6"></div>
+          <div class="ctl"><label for="d-A">Attachment height <output id="o-A"></output></label><input type="range" id="d-A" min="20" max="45" step="0.5" value="30"></div>
+          <div class="ctl"><label for="d-kv">Voltage <output id="o-kv"></output></label>
+            <select id="d-kv"><option value="110">110 kV</option><option value="220">220 kV</option><option value="380" selected>380 kV</option></select></div>
+        </div>
+        <div class="group">
+          <h4>The tree</h4>
+          <div class="ctl"><label for="d-x">Position along the span <output id="o-x"></output></label><input type="range" id="d-x" min="5" max="95" step="1" value="50"></div>
+          <div class="ctl"><label for="d-y">Distance beside the line <output id="o-y"></output></label><input type="range" id="d-y" min="0" max="20" step="0.25" value="7"></div>
+          <div class="ctl"><label for="d-h">Tree height <output id="o-h"></output></label><input type="range" id="d-h" min="4" max="35" step="0.25" value="19"></div>
+          <div class="ctl"><label for="d-r">Crown radius <output id="o-r"></output></label><input type="range" id="d-r" min="1" max="6" step="0.25" value="3"></div>
+        </div>
+        <div class="group">
+          <h4>The weather</h4>
+          <div class="ctl"><label for="d-t">Hottest conductor <output id="o-t"></output></label><input type="range" id="d-t" min="40" max="80" step="1" value="40"></div>
+          <div class="ctl"><label for="d-ice">Ice load <output id="o-ice"></output></label><input type="range" id="d-ice" min="0" max="40" step="1" value="20"></div>
+          <div class="ctl"><label for="d-wind">Wind pressure <output id="o-wind"></output></label><input type="range" id="d-wind" min="0" max="800" step="10" value="500"></div>
+        </div>
+      </form>
+
+      <div class="views">
+        <div class="verdict" aria-live="polite"><span class="pill" id="v-pill">clear</span><p id="v-text"></p></div>
+        <div class="view">
+          <div class="vh"><b>Side view of the span</b><span>conductor at each scenario; tree in green</span></div>
+          <svg id="v-side" viewBox="0 0 640 280" role="img" aria-label="Side view of the span with the conductor in each scenario and the tree"></svg>
+        </div>
+        <div class="view">
+          <div class="vh"><b>Cross-section at the tree</b><span>dashed circles: required distance</span></div>
+          <svg id="v-cross" viewBox="0 0 640 300" role="img" aria-label="Cross-section at the tree with the conductor positions and the required distances"></svg>
+        </div>
+        <div class="view" style="overflow-x:auto">
+          <table class="results-t">
+            <thead><tr><th>Scenario</th><th>Sag</th><th>Clearance</th><th>Required</th><th>Margin</th></tr></thead>
+            <tbody id="v-rows"></tbody>
+          </table>
+          <p class="demo-note">Simplified on purpose: one conductor, level span, flat ground, the crown as a sphere. The pipeline does this for every conductor and every vegetation point of a real survey. Conductor: AAAC 600 mm², 16.3 N/m, EA 34 MN, 23e-6/°C. Tiers: violation under the required distance, urgent within 1.5 m of it, monitor within 3 years of 1 m/year growth.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="bg" id="results">
   <div class="wrap">
     <p class="eyebrow">Results</p>
@@ -409,6 +513,26 @@ curl -L -C - -o data/t1z8.las https://huggingface.co/datasets/heig-vd-geo/GridNe
     </div>
   </div>
 </section>
+<section class="surface" id="contact">
+  <div class="wrap contact-grid">
+    <div>
+      <p class="eyebrow">About me</p>
+      <h2>Daniel Engelberg</h2>
+      <p class="sub">Mechanical engineer, B.Sc. Technion (robotics specialization). Authorized to work in the US and relocating to New York. I built this project for Treeswift's Forward Deployed Engineer role.</p>
+      <ul class="cv-facts">
+        <li><b>Projects:</b> this LiDAR clearance pipeline; Handy AI, a production WhatsApp AI platform (Python, PostgreSQL, 350+ tests); a hotel robot operating system.</li>
+        <li><b>Experience:</b> FlowTransit (transit data and map matching); Formula Student Technion, high-voltage engineer.</li>
+        <li><b>Skills:</b> Python, point clouds and geometry, robotics (kinematics, path planning, control), LLM APIs and AI agents.</li>
+      </ul>
+    </div>
+    <div class="contact-links">
+      <a class="primary" href="cv/Daniel-Engelberg-CV.pdf" target="_blank" rel="noopener"><span class="k">CV · PDF, 1 page</span><span class="v">Download my CV →</span></a>
+      <a href="mailto:danielengelberg131@gmail.com?subject=Tree-to-line%20clearance"><span class="k">Email</span><span class="v">danielengelberg131@gmail.com</span></a>
+      <a href="https://www.linkedin.com/in/danielengelberg/" target="_blank" rel="noopener"><span class="k">LinkedIn</span><span class="v">linkedin.com/in/danielengelberg ↗</span></a>
+      <a href="https://github.com/KingDanielE/lidar-clearance" target="_blank" rel="noopener"><span class="k">Code</span><span class="v">github.com/KingDanielE/lidar-clearance ↗</span></a>
+    </div>
+  </div>
+</section>
 </main>
 
 <footer>
@@ -434,7 +558,7 @@ curl -L -C - -o data/t1z8.las https://huggingface.co/datasets/heig-vd-geo/GridNe
         </ul>
       </div>
     </div>
-    <div class="legal">Code: MIT licence. Data: GridNet-HD (HEIG-VD), CC BY 4.0; the figures are derived from it. Carreaud et al., <em>GridNet-HD: A High-Resolution Multi-Modal Dataset for LiDAR-Image Fusion on Power Line Infrastructure</em>, 2026.</div>
+    <div class="legal">Code: MIT licence. Data: GridNet-HD (HEIG-VD), CC BY 4.0; the figures are derived from it. Carreaud et al., <em>GridNet-HD: A High-Resolution Multi-Modal Dataset for LiDAR-Image Fusion on Power Line Infrastructure</em>, 2026. Independent project; not affiliated with or endorsed by Treeswift.</div>
   </div>
 </footer>
 
@@ -445,6 +569,133 @@ curl -L -C - -o data/t1z8.las https://huggingface.co/datasets/heig-vd-geo/GridNe
   addEventListener("scroll", update, { passive: true });
   addEventListener("resize", update);
   update();
+</script>
+<script>
+(() => {
+  const P = { w: 16.3, ea: 57e9 * 600e-6, alpha: 23e-6, d: 0.0319, r: 0.016, tSurvey: 15, tWind: 10 };
+  const $ = (id) => document.getElementById(id);
+  const ids = ["L", "sag", "A", "kv", "x", "y", "h", "r", "t", "ice", "wind"];
+  const fmt = (v, u, n = 1) => `${Number(v).toFixed(n)} ${u}`;
+  const units = { L: ["m", 0], sag: ["m", 1], A: ["m", 1], kv: ["kV", 0], x: ["%", 0], y: ["m", 2], h: ["m", 2], r: ["m", 2], t: ["°C", 0], ice: ["N/m", 0], wind: ["N/m²", 0] };
+
+  // Change-of-state equation (parabolic), as clearance/scenarios.state_change.
+  function stateChange(H1, w1, t1, w2, t2, L) {
+    const K = -H1 + P.ea * w1 * w1 * L * L / (24 * H1 * H1) + P.ea * P.alpha * (t2 - t1);
+    const M = P.ea * w2 * w2 * L * L / 24;
+    let lo = 1, hi = 1e7;
+    for (let i = 0; i < 100; i++) { const m = (lo + hi) / 2; (m * m * (m + K) - M > 0) ? (hi = m) : (lo = m); }
+    return (lo + hi) / 2;
+  }
+
+  function compute(v) {
+    const L = v.L, H1 = (L * L / (8 * v.sag)) * P.w;
+    const req = 1.5 + 0.01 * v.kv, reqWind = Math.max(1.5, 0.01 * v.kv);
+    const wq = v.wind * P.d, ww = Math.hypot(P.w, wq), th = Math.atan2(wq, P.w);
+    const sc = [
+      { key: "surveyed", name: "As surveyed, 15 °C", color: "#14181f", dash: "", sag: v.sag, lat: 0, req },
+      { key: "hot", name: `Hot, ${v.t} °C`, color: "#dc2626", dash: "7 5", w2: P.w, t2: v.t, req },
+      { key: "ice", name: `Ice, 0 °C + ${v.ice} N/m`, color: "#7c3aed", dash: "2 4", w2: P.w + v.ice, t2: 0, req },
+      { key: "windL", name: `Wind, ${v.wind} N/m² (left)`, color: "#3b82f6", dash: "3 5", w2: ww, t2: P.tWind, req: reqWind, side: -1 },
+      { key: "windR", name: `Wind, ${v.wind} N/m² (right)`, color: "#3b82f6", dash: "3 5", w2: ww, t2: P.tWind, req: reqWind, side: 1 },
+    ];
+    const xt = v.x / 100 * L, cz = v.h - v.r;
+    for (const s of sc) {
+      if (s.key !== "surveyed") {
+        const H2 = stateChange(H1, P.w, P.tSurvey, s.w2, s.t2, L);
+        s.sag = s.w2 * L * L / (8 * H2);
+      }
+      const sw = s.side ? th : 0;
+      s.vert = s.sag * Math.cos(sw);
+      s.lat = s.side ? s.side * s.sag * Math.sin(sw) : 0;
+      let best = Infinity;
+      for (let i = 0; i <= 400; i++) {
+        const x = L * i / 400, f = 4 * x * (L - x) / (L * L);
+        const dx = x - xt, dy = s.lat * f - v.y, dz = (v.A - s.vert * f) - cz;
+        best = Math.min(best, Math.hypot(dx, dy, dz));
+      }
+      s.clear = Math.max(0, best - v.r - P.r);
+      s.margin = s.clear - s.req;
+    }
+    const gov = sc.reduce((a, b) => (b.margin < a.margin ? b : a));
+    const tier = gov.margin < 0 ? "violation" : gov.margin < 1.5 ? "urgent" : gov.margin < 3 ? "monitor" : "clear";
+    return { sc, gov, tier, req, reqWind, th };
+  }
+
+  const el = (tag, attrs, text) => {
+    const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [k, val] of Object.entries(attrs)) e.setAttribute(k, val);
+    if (text != null) e.textContent = text;
+    return e;
+  };
+
+  function drawSide(v, r) {
+    const svg = $("v-side"); svg.replaceChildren();
+    const W = 640, H = 280, x0 = 50, x1 = 600, top = Math.max(v.A, v.h) + 4;
+    const X = (x) => x0 + (x1 - x0) * x / v.L, Z = (z) => 250 - 225 * z / top;
+    svg.append(el("rect", { x: 0, y: 250, width: W, height: 30, fill: "#e3e6e8" }));
+    for (const tx of [0, v.L]) svg.append(el("line", { x1: X(tx), y1: 250, x2: X(tx), y2: Z(v.A) - 6, stroke: "#67737e", "stroke-width": 3 }));
+    const xt = v.x / 100 * v.L;
+    svg.append(el("line", { x1: X(xt), y1: 250, x2: X(xt), y2: Z(v.h - 2 * v.r), stroke: "#1da56c", "stroke-width": 4 }));
+    svg.append(el("circle", { cx: X(xt), cy: Z(v.h - v.r), r: 225 * v.r / top, fill: "#1da56c", opacity: 0.85 }));
+    for (const s of [...r.sc].reverse()) {
+      if (s.key === "windL") continue;
+      let d = "";
+      for (let i = 0; i <= 60; i++) { const x = v.L * i / 60, f = 4 * x * (v.L - x) / (v.L * v.L); d += `${i ? "L" : "M"}${X(x).toFixed(1)} ${Z(v.A - s.vert * f).toFixed(1)}`; }
+      svg.append(el("path", { d, fill: "none", stroke: s.color, "stroke-width": s.key === "surveyed" ? 2.4 : 2, "stroke-dasharray": s.dash }));
+    }
+    svg.append(el("text", { x: x0, y: 272, "font-size": 12, "font-family": "JetBrains Mono, monospace", fill: "#67737e" }, `span ${v.L} m · heights stretched ${((225 / top) / ((x1 - x0) / v.L)).toFixed(1)}x · tree ${v.y} m beside the line`));
+  }
+
+  function drawCross(v, r) {
+    const svg = $("v-cross"); svg.replaceChildren();
+    const xt = v.x / 100 * v.L, f = 4 * xt * (v.L - xt) / (v.L * v.L);
+    const pts = r.sc.map((s) => ({ s, y: s.lat * f, z: v.A - s.vert * f }));
+    const reach = Math.max(r.req, r.reqWind);
+    let ymin = Math.min(v.y - v.r, ...pts.map((p) => p.y - reach)) - 1, ymax = Math.max(v.y + v.r, ...pts.map((p) => p.y + reach)) + 1;
+    const zmax = Math.max(v.h, ...pts.map((p) => p.z + reach)) + 1;
+    const zlo0 = Math.min(v.h - 2 * v.r, ...pts.map((p) => p.z - reach)) - 2;
+    const zlo = zlo0 < 3 ? 0 : zlo0;
+    const sx = 600 / (ymax - ymin), sz = 260 / (zmax - zlo), k = Math.min(sx, sz);
+    const cx = 320 - k * (ymin + ymax) / 2;
+    const Y = (y) => cx + k * y, Z = (z) => 275 - k * (z - zlo);
+    if (zlo === 0) svg.append(el("rect", { x: 0, y: 275, width: 640, height: 25, fill: "#e3e6e8" }));
+    else svg.append(el("text", { x: 8, y: 292, "font-size": 11, "font-family": "JetBrains Mono, monospace", fill: "#818c98" }, `${zlo.toFixed(0)} m above ground`));
+    svg.append(el("line", { x1: Y(v.y), y1: 275, x2: Y(v.y), y2: Z(v.h - 2 * v.r), stroke: "#1da56c", "stroke-width": 5 }));
+    svg.append(el("circle", { cx: Y(v.y), cy: Z(v.h - v.r), r: k * v.r, fill: "#1da56c", opacity: 0.85 }));
+    for (const p of pts) svg.append(el("circle", { cx: Y(p.y), cy: Z(p.z), r: k * p.s.req, fill: "none", stroke: p.s.color, "stroke-opacity": 0.45, "stroke-dasharray": "4 4" }));
+    for (const p of pts) svg.append(el("circle", { cx: Y(p.y), cy: Z(p.z), r: 5, fill: p.s.color, stroke: "#fff", "stroke-width": 1.5 }));
+    const g = r.gov, gp = pts.find((p) => p.s === g);
+    const dy = v.y - gp.y, dz = (v.h - v.r) - gp.z, dd = Math.hypot(dy, dz) || 1;
+    const ex = v.y - v.r * dy / dd, ez = (v.h - v.r) - v.r * dz / dd;
+    svg.append(el("line", { x1: Y(gp.y), y1: Z(gp.z), x2: Y(ex), y2: Z(ez), stroke: "#14181f", "stroke-width": 1.5 }));
+    svg.append(el("text", { x: (Y(gp.y) + Y(ex)) / 2 + 8, y: (Z(gp.z) + Z(ez)) / 2, "font-size": 12, "font-family": "JetBrains Mono, monospace", fill: "#14181f" }, `${g.clear.toFixed(2)} m`));
+    svg.append(el("line", { x1: Y(0), y1: 275, x2: Y(0), y2: 6, stroke: "#c6ccd1", "stroke-dasharray": "2 4" }));
+    svg.append(el("text", { x: Y(0) + 6, y: 16, "font-size": 11, "font-family": "JetBrains Mono, monospace", fill: "#818c98" }, "line axis"));
+  }
+
+  function render() {
+    const v = {};
+    for (const id of ids) { v[id] = Number($("d-" + id).value); const [u, n] = units[id]; $("o-" + id).textContent = fmt(v[id], u, n); }
+    const r = compute(v);
+    drawSide(v, r); drawCross(v, r);
+    $("v-rows").replaceChildren(...r.sc.map((s) => {
+      const tr = document.createElement("tr"); if (s === r.gov) tr.className = "gov";
+      tr.innerHTML = `<td><span class="sw" style="border-color:${s.color};border-top-style:${s.dash ? "dashed" : "solid"}"></span>${s.name}</td><td>${s.sag.toFixed(2)} m</td><td>${s.clear.toFixed(2)} m</td><td>${s.req.toFixed(1)} m</td><td class="${s.margin < 0 ? "neg" : ""}">${s.margin >= 0 ? "+" : ""}${s.margin.toFixed(2)} m</td>`;
+      return tr;
+    }));
+    const pill = $("v-pill"); pill.textContent = r.tier; pill.className = "pill " + r.tier;
+    const lc = (n) => n[0].toLowerCase() + n.slice(1);
+    const g = r.gov, txt = {
+      violation: `Inside the required ${g.req.toFixed(1)} m: ${g.clear.toFixed(2)} m in the ${lc(g.name)} case. Trim now.`,
+      urgent: `${g.clear.toFixed(2)} m in the ${lc(g.name)} case, within 1.5 m of the required ${g.req.toFixed(1)} m. Trim this cycle.`,
+      monitor: `${g.clear.toFixed(2)} m in the ${lc(g.name)} case: inside 3 years of growth. Watch list.`,
+      clear: `Worst case ${lc(g.name)}: ${g.clear.toFixed(2)} m, ${g.margin.toFixed(1)} m more than required.`,
+    };
+    $("v-text").textContent = txt[r.tier];
+  }
+  for (const id of ids) $("d-" + id).addEventListener("input", render);
+  render();
+})();
 </script>
 </body>
 </html>
