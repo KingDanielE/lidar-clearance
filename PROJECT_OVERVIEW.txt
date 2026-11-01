@@ -1,0 +1,1085 @@
+===============================================================================
+ TREE-TO-LINE CLEARANCE FROM LIDAR
+ A complete description of the project: what it does, how every part works,
+ why each design decision was made, how it was validated, and what it cannot do.
+===============================================================================
+
+ Repository : https://github.com/KingDanielE/lidar-clearance  (public, MIT)
+ Project page: https://lidar-clearance.vercel.app
+ Language   : Python 3.12 (NumPy, SciPy, scikit-learn, laspy, matplotlib)
+ Data       : GridNet-HD (HEIG-VD), hand-labelled drone LiDAR of Swiss
+              high-voltage lines, CC BY 4.0
+
+
+CONTENTS
+--------
+  1.  The problem in one paragraph
+  2.  Why it matters and what a useful answer looks like
+  3.  Design principles
+  4.  The data
+  5.  The pipeline at a glance
+  6.  Repository layout: every file and what it does
+  7.  Phase 1: classifying the point cloud
+  8.  Phase 2: rebuilding the line (towers, spans, conductors, catenaries)
+  9.  Phase 3: clearance in every scenario
+  10. Joining neighbouring tiles
+  11. Finding tiles worth downloading (remote screening)
+  12. How the results are scored
+  13. Results
+  14. How the project developed: problems found and how each was fixed
+  15. Assumptions and limitations
+  16. Engineering: tests, CI, packaging, commands, outputs
+  17. The project page
+  18. Glossary
+  19. Possible next steps
+
+
+===============================================================================
+1. THE PROBLEM IN ONE PARAGRAPH
+===============================================================================
+
+An overhead power line must keep a minimum distance from trees. Trees grow, and
+the conductors move: on a hot day a conductor expands and sags lower, under ice
+it is heavier and sags lower, and in a strong wind it swings sideways. A tree
+that is clear of the line today, as it hangs during a survey, can be too close
+on the worst day of the year. This project takes a raw LiDAR point cloud of a
+power-line corridor (millions of 3D points with no labels) and answers, for
+every tree: how close is it to a conductor now, how close would it be in the
+worst-case hot, iced and windy conditions, is that closer than the law
+allows, and could the tree hit the line if it fell. It reports the answer as
+tiered "encroachment zones", a list of hazard trees, and an explicit list of
+places it could not assess.
+
+
+===============================================================================
+2. WHY IT MATTERS AND WHAT A USEFUL ANSWER LOOKS LIKE
+===============================================================================
+
+Vegetation contact is a leading cause of power outages and can start wildfires.
+Utilities therefore inspect corridors and trim trees on a cycle. LiDAR (laser
+scanning from a drone, helicopter or aircraft) captures the corridor in 3D, but
+a raw point cloud does not say which points are wires, which are trees, where
+the conductors would be on a hot day, or which trees break the rules.
+
+A useful answer must be:
+
+  - Located: where exactly is the problem (coordinates, span, conductor).
+  - Prioritised: what needs trimming now, soon, or just watching.
+  - Physically right: based on where the conductor will be in the worst case,
+    not only where it hung on the survey day.
+  - Rule-based: tied to the legal clearance distance, not an arbitrary number.
+  - Honest about gaps: if part of the line could not be modelled, the trees
+    beside it must be reported as "not assessed", never as "clear". A silent
+    gap is the most dangerous kind of error, because it looks like good news.
+  - Verified: every number checked against independent ground truth.
+
+
+===============================================================================
+3. DESIGN PRINCIPLES
+===============================================================================
+
+  - No trained model. Every decision is a geometric rule or a physical equation
+    that can be read in the code and explained. This makes the pipeline
+    transparent, needs no training data, and fails in ways that can be traced.
+  - Physics where physics applies. Conductors hang as catenaries; their
+    behaviour under heat, ice and wind follows the conductor change-of-state
+    equation. These are used directly rather than learned.
+  - Evidence for every object. A tower must be supported by evidence (steel, a
+    kink or turn in the wires, a line ending) and, after fitting, by a conductor
+    actually hanging from it. A conductor must be long enough, well covered by
+    points, smooth, and anchored.
+  - Model only what the data supports. A conductor is modelled only over the
+    stretch its points cover; it is not extrapolated to a tower it never
+    reaches.
+  - Measure end to end against independent truth, and record held-out tests as
+    they come out, including failures.
+  - Every rule carries the reason it exists. In the code and the docs, each
+    threshold is accompanied by the real case that motivated it.
+
+
+===============================================================================
+4. THE DATA
+===============================================================================
+
+GridNet-HD (HEIG-VD, Switzerland; Carreaud et al., arXiv:2601.13052, 2026) is a
+dataset of UAV (drone) LiDAR and imagery of high-voltage lines, with a label on
+every point. Labels include several kinds of ground (grass, rock, road),
+vegetation, buildings, the parts of a pylon (tower body, insulators, etc.) and
+the wires (conductors and structural cables). This project maps them to five
+classes, using ASPRS LAS codes where one exists:
+
+    ground      (ASPRS 2)   grass, rock, road and other ground labels
+    vegetation  (ASPRS 5)   trees and shrubs
+    building    (ASPRS 6)
+    pylon       (ASPRS 15)  tower body, insulators and other tower parts
+    wire        (ASPRS 14)  conductors and structural cables
+
+Only train and validation zones carry labels (test-zone labels are withheld).
+The tiles used:
+
+    tile    points    extent (x by y by relief)   character
+    t5c2    30.6 M    268 x 581 m, 236 m          alpine; tuning tile
+    t5b6    36.1 M    328 x 747 x 223 m           alpine; bigger towers
+    t1z6a   50.3 M    213 x 610 x 91 m            forest; trees as tall as towers
+    t1z6b   51.5 M    238 x 614 x 105 m           forest; neighbour of t1z6a
+    t1z8    50.6 M    216 x 683 x 83 m            forest; first held-out test
+    t2z5    66.7 M    515 x 680 x 162 m           a line junction
+    t4z1   102.8 M    260 x 934 x 375 m           forest, steep; second held-out
+    total  ~389 M points
+
+Files are 1.2-4.3 GB each, downloaded from Hugging Face. The data is not in the
+repository; the figures in docs/ and on the project page are derived from it
+(CC BY 4.0, credited).
+
+
+===============================================================================
+5. THE PIPELINE AT A GLANCE
+===============================================================================
+
+    LAS point cloud
+        |
+        v
+    PHASE 1  classify:  ground / vegetation / wire / pylon / building
+        |                (geometry rules on 0.15 m voxels)
+        v
+    PHASE 2  model the line:
+        |      towers  ->  spans (a graph)  ->  conductors  ->  catenary fits
+        v
+    PHASE 3  clearance:
+               each conductor as surveyed, hot (40 C), iced (0 C + 20 N/m),
+               swung by wind (500 N/m2), against the Swiss legal distances
+        |
+        v
+    encroachment zones (tiered), hazard trees, wire not assessed,
+    clearance-coloured point cloud, reports and plots
+
+Phase 3 also uses the Phase 1 vegetation directly (the points it measures).
+
+
+===============================================================================
+6. REPOSITORY LAYOUT: EVERY FILE AND WHAT IT DOES
+===============================================================================
+
+clearance/ (the library)
+  classes.py     Class codes, GridNet-HD and ASPRS label mappings, remapping.
+  io.py          Reading LAS (Cloud dataclass), voxel downsampling (returns the
+                 voxel centroids and the map back to every original point),
+                 reading classified output, writing LAS with extra fields,
+                 read_many() to load neighbouring tiles onto one origin.
+  ground.py      Progressive morphological filter -> terrain raster (DTM) ->
+                 height above ground (HAG) for every point.
+  features.py    Per-point eigenvalue features from the 16 nearest neighbours
+                 (linearity, planarity, scattering, main-direction z, normal z)
+                 and gap_below (empty space under a point's vertical run).
+  classify.py    The Phase 1 rules (Params dataclass holds every threshold):
+                 wires, pylons, buildings, vegetation; connected components.
+  pipeline.py    Phase 1 end to end: downsample -> DTM/HAG -> features ->
+                 classify -> labels copied back to the full cloud; timings.
+  evaluate.py    Per-class precision, recall, IoU and confusion matrix against
+                 ground-truth labels.
+  plots.py       Plan, along-line profile and 3D views coloured by class.
+  synthetic.py   A synthetic corridor (terrain, pylons, catenary wires, trees,
+                 buildings, known labels) and a synthetic junction scene, used
+                 by the tests and for quick runs.
+  spans.py       Tower and Span dataclasses; tower finding from pylon clusters
+                 and from kinks in the conductors' envelope; legacy single-route
+                 span builder.
+  graph.py       The tower and line graph: wire directions, direction groups,
+                 towers from direction changes (with crossing rejection),
+                 terminal towers, merging, edges (spans) with coverage and
+                 angle tests, bypass pruning, rays and tower-less spans.
+  catenary.py    Conductor separation, catenary fitting, trimming, the sideways
+                 split, validation rules, fit_spans() for every span.
+  linemodel.py   Phase 2 in one call: graph -> fit -> tower confirmation.
+  scenarios.py   LineParams (conductor and LeV defaults); the change-of-state
+                 equation; hot, iced and wind curves through the attachment
+                 points; deciding which attachments are exact, estimated or
+                 unknown.
+  encroach.py    Rules (thresholds, tiers); clearance per scenario; vegetation
+                 cleaning; encroachment zones; unmodelled-wire report.
+  hazard.py      Treetops from a canopy height model, crown radius and base
+                 (lean), fall-in reach and status.
+  validate3.py   Scoring Phase 3 against a reference run (points, zones, tiers,
+                 hazard trees).
+  sample.py      Reading a sample of a LAS file by HTTP byte range (remote
+                 screening).
+
+scripts/ (command-line entry points)
+  run_phase1.py  Phase 1 on one or more tiles; report, confusion matrix, plots.
+  run_phase2.py  Phase 2 on Phase 1's output; conductor table, model LAS,
+                 comparison with a model fitted to hand-labelled wire, plots.
+  run_phase3.py  Phase 3; zones, hazard trees, unmodelled wire, scoring (same
+                 model and end to end), plots.
+  run_batch.py   All three phases on several tiles ("a.las+b.las" joins tiles);
+                 one summary row per tile.
+  screen_zones.py  Remote screening of zones without downloading them.
+
+tests/           43 tests in 11 files (section 16).
+docs/            method.md (how it works), validation.md (every score), figures.
+site/            The project page (static HTML + figures), deployed on Vercel.
+pyproject.toml   Package metadata, command entry points, ruff and pytest config.
+.github/workflows/ci.yml   GitHub Actions: ruff check, ruff format --check, pytest.
+requirements.txt Pinned dependencies.
+
+Size: about 4,600 lines of Python including tests.
+
+
+===============================================================================
+7. PHASE 1: CLASSIFYING THE POINT CLOUD
+===============================================================================
+
+Goal: give every point one of ground, vegetation, wire, pylon, building.
+
+7.1 Voxel downsampling (io.voxel_downsample)
+  The cloud is reduced to one point per 0.15 m cube (the centroid). On t5c2 this
+  takes 30.6 M points to 5.5 M. All further work runs on voxels; at the end each
+  original point inherits its voxel's label. Rationale: much faster, evens out
+  density differences between flight lines, and 0.15 m is fine enough to keep a
+  wire (about 3 cm thick) as a thin line of voxels.
+
+7.2 Ground and height above ground (ground.py)
+  A progressive morphological filter (Zhang et al., 2003): the lowest point in
+  each 0.5 m raster cell; low outliers (cells more than 1 m below their 5 x 5
+  median, e.g. multipath "holes") are lifted first so they cannot drag the
+  terrain down. Then grey-scale morphological openings with windows growing
+  from 3 cells up to 24 m: at each step a cell more than dh above the opened
+  surface is not ground, where dh = 0.3 m + 0.3 x (window growth in metres),
+  capped at 2.5 m. Small windows remove cars and shrubs, large ones buildings
+  and tree clumps, and the growing threshold keeps steep slopes as ground. The
+  ground cells are filled and lightly smoothed into a terrain model (DTM). Height
+  above ground (HAG) = point z minus the DTM under it. Points below 0.5 m HAG
+  are ground.
+
+7.3 Geometric features (features.py)
+  For each point, the covariance of its 16 nearest neighbours gives three
+  eigenvalues l1 >= l2 >= l3, from which:
+    linearity   (l1 - l2) / l1   high on wires (one dominant direction)
+    planarity   (l2 - l3) / l1   high on roofs and flat surfaces
+    scattering  l3 / l1          high in tree crowns (no structure)
+    dir_z       vertical component of the main direction (0 = horizontal)
+    normal_z    vertical component of the surface normal
+  gap_below: within each 0.5 m column, points are grouped into vertical runs;
+  gap_below is the empty space under the run a point belongs to. A wire hangs
+  over open air; a branch usually has more of the tree just below it. Using
+  runs (not single points) stops a wire's own neighbouring points from closing
+  the gap.
+
+7.4 Rules (classify.py; thresholds in Params)
+  Wires:
+    - HAG > 3 m, linearity >= 0.8, |dir_z| <= 0.6 (main direction within about
+      37 degrees of horizontal; raised from a stricter value because steep
+      mountain spans failed), gap_below >= 1 m.
+    - Connected clusters must be >= 15 m long and >= 4 times longer than wide.
+    - Short pieces (>= 3 m) are added back if they line up with a nearby wire
+      (direction within about 11 degrees): sparse stretches of a span.
+    - Region growing (0.3 m) into linear neighbours fills small gaps.
+    - Two sets are kept: all wires and "strict" wires (before growing), used by
+      the pylon rule so that tower steel absorbed into wires does not stop a
+      tower being found.
+  Pylons:
+    - Connected clusters >= 10 m tall, median scattering < 0.14 (lattice steel
+      is regular; tree crowns scatter around 0.28), whose top is within 3 m of
+      a wire and at least as high as the wires there.
+    - Points more than 15 m from the tower centre are given back to wire (the
+      voxel grid joins wires to the tower they hang from).
+  Buildings:
+    - Smooth (scattering < 0.05), mostly planar (planarity >= 0.4) clusters of
+      >= 100 points and >= 2 m wide.
+  Vegetation:
+    - Everything else above ground.
+
+7.5 What Phase 1 gets right and wrong (details in section 13)
+  - Wires are found reliably: 97-99.5% recall on every tile.
+  - Wire precision is lower (70-97%): tower steel and some canopy are called
+    wire. Phase 2 is designed to absorb this (validation rejects clusters that
+    are not catenaries).
+  - Forest towers are often missed: trees as tall as the tower merge with it
+    into one cluster that scatters like forest. Phase 2 therefore finds towers
+    from the wires instead of relying on Phase 1.
+  - Buildings are weak (smooth rock and ground are confused with roofs); they
+    play no part in the clearance results.
+
+
+===============================================================================
+8. PHASE 2: REBUILDING THE LINE
+===============================================================================
+
+Goal: from the wire points, find the towers, the spans between them, each
+individual conductor in each span, and a catenary curve for each conductor.
+
+8.1 Why a graph
+  The first version assumed one line per tile: towers sorted along one axis and
+  one route cut into spans. At the t2z5 junction (four towers within 60 m, a
+  second line leaving) it found 3 of 6 towers and fitted conductors straight
+  through the junction. The current version builds a graph: towers are nodes,
+  spans are edges, so a tile may hold several lines, branches and junctions.
+
+8.2 Towers: four kinds of evidence, then confirmation
+  Candidates from different evidence are merged within 8 m (earlier source
+  wins):
+
+  a) Pylon clusters: connected pylon points (>= 200 voxels); pieces within
+     10 m merged (one tower can be split by a gap in the scan).
+
+  b) Kinks in the conductor envelope. Wire points are grouped by plan direction
+     (peaks of a circular histogram), so each line is handled separately. For
+     each group, the upper envelope of the conductors (90th percentile of wire
+     z in 1 m steps along the line) must bend downwards: the slope 15 m before
+     minus the slope 15 m after > 0.03. A catenary alone always gives a negative
+     value (it curves upwards); a tower gives a peak. Both sides must be at
+     least 80% covered, so a kink is not invented at the last metres before a
+     tile edge (once a tree at wire height there passed as a tower). And the
+     line's centre column (2.5 m radius, from 3 m below the lowest conductor to
+     1 m below the top wire, searched +-8 m) must hold >= 300 points that are
+     neither ground nor wire: at mid-span that column is open air; a tower body
+     fills it. True towers had 2,300-7,300 such points, false kinks 0-59.
+
+  c) Direction changes. Wires do not bend in mid-air. Where wire points within
+     6 m of each other run in clearly different plan directions (mean resultant
+     of doubled angles < 0.9, about 26 degrees), there is an angle or junction
+     tower. If every direction carries on past the spot, it is two lines
+     crossing, not a tower, and is dropped (t2z5 had one on its main span).
+
+  d) Terminals (second pass). A partial span at least 30 m long that stops
+     while the survey continues beyond it (ground beyond, so not a tile edge),
+     at structure at wire height, ends on a terminal tower. It must not be
+     within 25 m of a known tower (that is a jumper piece), and the structure
+     must be steel-shaped: median scattering <= 0.2 (lattice about 0.11, tree
+     crowns about 0.28). In t2z5 a line leaving the survey among trees as tall
+     as the wires passed every other test.
+
+  Confirmation (after the conductors are fitted): a tower is kept only if a
+  fitted conductor hangs from at least one of its spans. On t4z1, canopy that
+  Phase 1 called wire (about 86,000 points) kinked and branched like a line and
+  produced 4 towers 50-100 m off the real line; none of their spans fitted a
+  conductor, so they are now removed (their wire is still reported as
+  unmodelled in Phase 3). Tower ids are kept, so removed ones leave gaps.
+
+  Tried and rejected: moving wire-found towers onto the densest "steel" column
+  nearby pulled forest towers 8-9 m off, onto the canopy.
+
+  Result: on all seven tiles every true tower is found, within 0.0-2.6 m, and
+  none is false.
+
+8.3 Spans (graph edges)
+  - Two towers are joined if wire points running along the line between them
+    (within 12 m of it) cover at least 60% of its length, in its direction:
+    within 20 degrees, or atan(20 m / span length) on short spans. Conductors
+    hang from cross-arm ends up to about 10 m either side of a tower centre, so
+    on the 15 m span at the t2z5 junction they run at about 50 degrees to the
+    line between the tower centres; a fixed 20 degrees missed that span.
+  - Bypass pruning: an edge is dropped if a third tower lies within its 12 m
+    corridor (the line really goes through that tower), or if it forms a
+    triangle of edges with a tower lying within 15% of its length of the line
+    (t1z6a's 389 m bypass passed the middle tower at 12.07 m, just outside the
+    corridor).
+  - Each wire point goes to the nearest edge, only if it lies beside it (not
+    beyond its towers, -3 m to L + 3 m along it), aligned, or next to a tower.
+  - Wire leaving a tower that no edge explains becomes a partial span (a "ray")
+    to where the wire stops; wire near no tower becomes a tower-less span.
+  - Spans between two towers are "full"; the rest are "partial".
+
+8.4 Separating the conductors in a span
+  - Points within 3 m of a tower are left out first: clamps, insulator strings
+    and jumpers hang there and bend away from the catenary.
+  - The span's wire points are projected into its cross-section: lateral offset
+    from the span line, and height above one quadratic fitted to all of them.
+    Parallel conductors keep a constant offset along the span, so in these two
+    coordinates each conductor collapses into a compact blob, however patchy it
+    is along the span. DBSCAN (eps 0.5 m, 10 points) separates the blobs.
+    Bundled sub-conductors (closer than 0.5 m) stay one conductor.
+
+8.5 Fitting a catenary to each conductor
+  In the conductor's own vertical plane (u = horizontal distance along it):
+
+      z(u) = z0 + c * (cosh((u - u0) / c) - 1)
+
+  where (u0, z0) is the lowest point of the curve and c = H / w is the
+  catenary parameter: horizontal tension H divided by weight per metre w.
+  A large c means a tight, flat wire; a small c a slack one. Real conductors
+  here have c of about 900-2,400 m (down to about 160 m on short slack spans at
+  the junction).
+
+  - Start values come from a parabola fit.
+  - Robust least squares (SciPy, soft-L1 loss with a 10 cm scale): residuals
+    beyond about 10 cm count linearly, so stray points do not drag the curve.
+  - Up to two refits without points more than max(0.5 m, 3 robust sigma)
+    away vertically (the residual trim).
+  - If the optimiser diverges (on a nearly straight cluster u0 can run off by
+    kilometres and cosh overflows inside SciPy), the fit returns NaN and the
+    cluster is rejected instead of crashing the run. The frozen code crashed on
+    exactly this on held-out tile t4z1.
+  - Reported per conductor: c, sag below the chord (full spans), vertical and
+    lateral RMSE, coverage, lowest ground clearance, outliers dropped.
+
+8.6 Splitting conductors that were merged
+  Two wires at the same height can end up in one cluster: parallel phases
+  bridged by stray points, or a wire turning off to another tower. The vertical
+  trim cannot see this (both are at the right height), and the fit can still
+  look excellent vertically.
+  - Sideways split: a real conductor is 2-5 cm wide in plan (lateral RMSE).
+    If a fitted conductor's lateral RMSE exceeds 0.3 m, RANSAC (300 random
+    pairs, 0.3 m tolerance, pairs at least 5 m apart along the line) finds the
+    best-supported straight line in (along, lateral) coordinates. Those points
+    are refitted as one conductor; the rest is clustered again and each group
+    is fitted in turn. A line in those coordinates handles both parallel wires
+    and wires that diverge.
+  - Dropped-points refit: if the vertical trim drops at least a fifth of a
+    cluster (and at least the minimum point count), the dropped points are
+    clustered and fitted too, instead of being silently lost.
+  - RMSE re-split: a large cluster rejected for vertical RMSE is re-clustered
+    at half the DBSCAN radius (down to 0.125 m) and the pieces refitted (in a
+    forest tile, stray tower points had bridged two conductors into one
+    6,671-point cluster with a 2.65 m RMSE).
+  On t2z5 one 10,416-point cluster held a conductor and a wire diverging from
+  it; the fit kept 5,447 points to 6 cm vertically while 4,969 points were
+  silently dropped. With these splits, that span is 8 conductors, each 2-3 cm
+  wide in plan, and the tile's unmodelled wire fell from 896 m to 235 m.
+
+8.7 Modelling only where the data reaches
+  A conductor counts as reaching a tower only if its points come within 8 m of
+  it (3 m tower margin + 5 m). If it does not, the model stops where the data
+  stops. In t2z5 two wires of a parallel line stopped 53 m short of the span's
+  tower; modelled all the way to the tower, they ran through trees and created
+  false encroachment zones.
+
+8.8 Validation: which clusters are real conductors
+  A cluster is rejected (and listed with its reason in the report) if it:
+  - has too few points: 3 per metre of extent, capped at 100; but a piece with
+    no tower at either end needs the full 100, since nothing anchors it (on
+    t4z1 two scraps of canopy, 64 and 43 points, fitted c = 94 km and 48 m and
+    produced a false violation at 0.05 m; real tower-less pieces had 219-318);
+  - is shorter than 10 m;
+  - covers less than 50% of its extent with points;
+  - has c at a fit bound (20 m or 100 km);
+  - has a vertical RMSE above 25 cm (real conductors fit to about 2-7 cm);
+  - did not converge (non-finite fit);
+  - is a piece shorter than 30 m in a tower's span that does not reach the
+    tower (wire leaving a tower starts at it; on t1z6a such a 13 m mixture of
+    jumper, vegetation and unlabelled points was 0.69 m from a tree and 8 m
+    from any real wire).
+  This validation is what removes the clusters made of Phase 1's false wire.
+
+8.9 Outputs
+  <name>_phase2.json, <name>_conductors.csv, <name>_conductor_model.las (every
+  conductor sampled at 0.25 m, the input to Phase 3), plots of points and
+  fitted curves per span, and a plan of towers, spans and conductors. When hand
+  labels exist, the same Phase 2 is run on hand-labelled wire and each of our
+  conductors is matched to that model and compared (height difference, lateral
+  difference, sag and c difference).
+
+
+===============================================================================
+9. PHASE 3: CLEARANCE IN EVERY SCENARIO
+===============================================================================
+
+Goal: for every vegetation point, the distance to the nearest conductor in each
+scenario, compared with the required distance; then zones, hazard trees, and an
+honest list of what could not be assessed.
+
+9.1 The legal rules (Swiss Leitungsverordnung, LeV, SR 734.31)
+  The lines are in Switzerland, so the defaults follow the LeV for high-voltage
+  overhead lines, read from the official text (Fedlex):
+
+  - Art. 35(4)b: vertical distance between trees and bare conductors at
+    greatest sag: 1.5 m + 0.01 m per kV (fruit trees 2.5 m + 0.01 m/kV).
+    At 380 kV: 5.3 m (at 220 kV: 3.7 m). Applied here as a 3D distance, which
+    is stricter beside the line.
+  - Art. 47: greatest sag is the worse of (a) the conductor at 40 C and
+    (b) the conductor at 0 C with an extra 20 N/m of snow/ice load per
+    conductor or sub-conductor, without wind.
+  - Definitions no. 37 and Annex 4: wind deflection is computed with the
+    conductor at 10 C under 500 N/m2 of wind pressure on the wires.
+  - Art. 35(1) leaves the distance to trees in wind case by case; this project
+    uses 0.01 m/kV, at least 1.5 m (3.8 m at 380 kV), by analogy with
+    Art. 34(2), which sets that distance to the terrain beside the line in wind.
+
+  The nominal voltage is not in the data; 380 kV is assumed (--kv to change).
+
+9.2 The conductor (assumed, a parameter)
+  A typical AAAC/Aldrey (AlMgSi alloy) 600 mm2 class conductor, the kind used
+  on Swiss lines: diameter 31.9 mm, weight 16.3 N/m, elastic modulus 57 GPa
+  (EA about 34 MN), thermal expansion 23e-6 per C, radius 16 mm subtracted
+  from axis distances. Not the actual line's datasheet.
+
+9.3 The scenarios
+  For each conductor, sampled every 0.1 m over its modelled extent:
+
+  As surveyed
+    The Phase 2 catenary: where the wire hung during the flight, assumed at a
+    conductor temperature of 15 C (--t-survey).
+
+  Hot (40 C), ice (0 C + 20 N/m) and wind (10 C, 500 N/m2)
+    The conductor's horizontal tension at the survey is known from its fitted
+    catenary: H1 = c * w. It is carried to the new temperature and load with
+    the change-of-state equation for its span (parabolic form):
+
+      H2^2 * [ H2 - H1 + EA*w1^2*L^2 / (24*H1^2) + EA*alpha*(t2 - t1) ]
+            = EA * w2^2 * L^2 / 24
+
+    where L is the span length, EA the axial stiffness, alpha the thermal
+    expansion coefficient, t1/t2 the temperatures and w1/w2 the loads per
+    metre. It balances the wire's elastic stretch against its thermal growth
+    and its geometric length: a hotter wire gets longer, sags more, and in
+    doing so loses tension, which in turn lets it stretch less ("elastic
+    relief"). The new curve has c2 = H2 / w2 and passes through the same two
+    attachment points. With an infinitely stiff conductor the equation reduces
+    to pure thermal elongation (tested), and solving it forward then back
+    returns the starting tension (tested).
+
+    - Hot: w2 = w1 = 16.3 N/m, t2 = 40 C.
+    - Ice: w2 = 16.3 + 20 = 36.3 N/m, t2 = 0 C. Cooling from 15 C to 0 C
+      shortens the wire and partly cancels the extra load, so on these spans
+      the ice case is milder than the hot case. Worked example, a 130 m span:
+      2.35 m sag as surveyed, 2.51 m iced, 2.93 m at 40 C (checked by hand
+      calculation in the tests).
+    - Wind: the load is the resultant of weight and wind,
+      wind load = 500 Pa x 0.0319 m = 15.95 N/m, so w2 = sqrt(16.3^2 +
+      15.95^2) = 22.8 N/m at 10 C. The loaded curve swings about its chord by
+      atan(15.95 / 16.3) = 44.4 degrees, towards either side ("blowout left"
+      and "blowout right").
+
+  Attachment points (where the curve is pinned) come from what each
+  conductor's data reaches:
+    - both towers: exact;
+    - one tower and at least 30 m of data: the far attachment is extrapolated
+      along the fitted curve at the median full-span length of the tile;
+      flagged "estimated";
+    - otherwise (a short piece, or no tower): checked as surveyed only, and
+      counted in conductors_not_assessed_for_sag_wind.
+    Extrapolating 15 m pieces over a 270 m span had swung them metres sideways
+    in the wind case, into trees nowhere near the real wire.
+
+9.4 Cleaning the vegetation first
+  Phase 1 errors would otherwise become false alarms, so three kinds of
+  "vegetation" are removed before measuring:
+  - Near towers: vegetation-labelled points within 8 m (in plan) of a tower
+    centre. On t1z6a the only 3 false zones were hand-labelled tower steel
+    3-6 m from a tower centre, while every real zone was at least 30 m from a
+    tower. The cost: a tree inside a tower's footprint is not reported.
+  - Floating fragments: vegetation clusters (1 m connectivity) with fewer than
+    200 points and nothing below 3 m above ground. Plants grow from the ground;
+    every false zone these caused on the alpine tiles was hand-labelled
+    conductor.
+  - On-conductor points: within 0.5 m of the conductor model with at least 80%
+    of their 1 m neighbourhood also on it (a piece of wire). A crown touching
+    the wire keeps its contact points, because the crown behind them is in
+    their neighbourhood (tested).
+
+9.5 Clearance and tiers
+  For each vegetation point and scenario: the 3D distance to the nearest
+  conductor axis minus the conductor radius. Each scenario has its required
+  distance (5.3 m hot/ice and as surveyed, 3.8 m wind). The scenario with the
+  smallest margin (clearance minus required distance) governs that point.
+  Tiers by margin:
+      violation   margin < 0               inside the legal distance
+      urgent      0 <= margin < 1.5 m      will be inside it soon; trim now
+      monitor     1.5 m <= margin < 3 m    within 3 years of growth (1 m/year
+                                           x 3-year cycle, both assumptions)
+      clear       margin >= 3 m
+
+9.6 Encroachment zones
+  Flagged points (violation, urgent, monitor) are clustered with 1 m
+  connectivity (at least 5 points). For each zone: tier, governing scenario,
+  clearance, required distance and margin, the minimum clearance in every
+  scenario, nearest span and conductor, horizontal and vertical offset from the
+  conductor, location, point count, plan area, years to violation, and whether
+  it relies on an estimated attachment. Sorted worst first. Written as CSV and
+  as GeoJSON (zone outlines in the tile's projected coordinates).
+
+9.7 Unmodelled wire (what was not assessed)
+  Clearance can only be measured to modelled conductors. Wire-labelled points
+  more than 1 m from every conductor model, grouped into line-shaped stretches
+  (at least 10 m long, 4 times longer than wide, away from towers), are listed
+  with their length and the number of vegetation points within the watch
+  distance of each, as NOT ASSESSED, instead of silently counting that
+  vegetation as clear.
+
+9.8 Hazard (fall-in) trees
+  A tree outside the clearance zone can still hit the line when it falls.
+  - Treetops: local maxima (3 m window) of a 0.5 m canopy height model, at
+    least 3 m tall.
+  - Each vegetation point is assigned to its nearest treetop (within
+    0.4 x height + 2 m). From its points each tree gets a crown radius (spread
+    of the upper half) and a base (where its low points stand, if there are at
+    least 10; otherwise straight below the top), so a leaning tree pivots at
+    its real base.
+  - Reach = sqrt(stem length^2 + crown radius^2) from the base, in any
+    direction (a sphere, so falls down a slope are included).
+  - Status: "strike" if the reach touches a conductor in any scenario;
+    "within_mvcd" if it comes within the wind distance (3.8 m); otherwise safe.
+  - Not modelled: which way a leaning tree will actually fall.
+
+9.9 Outputs
+  <name>_phase3.json (everything, including scores), _encroachments.csv and
+  .geojson, _hazard_trees.csv, _unmodelled_wire.csv,
+  _vegetation_clearance.las (each vegetation point with fields "clearance" and
+  "tier"), and plots: an along-line clearance profile, a plan of zones and
+  hazard trees, and a cross-section at the worst zone showing every conductor
+  as surveyed, hot, iced and swung, with the required-distance circles.
+
+
+===============================================================================
+10. JOINING NEIGHBOURING TILES
+===============================================================================
+
+A span cut by a tile edge has an estimated far attachment, so its hot, iced
+and wind positions are estimates. io.read_many() loads several overlapping
+tiles onto one shared origin, and they are processed as one cloud (Phase 1
+with several inputs, or "a.las+b.las" in the batch runner). t1z6a and t1z6b
+(102 M points together) overlap and share two towers:
+
+                                       t1z6a alone  t1z6b alone  joined
+    towers                             3            3            5
+    spans (full)                       5 (2)        5 (2)        11 (4)
+    partial-span conductors            10           10           14 (20 apart)
+    zones relying on an estimated
+      attachment                       7 of 43      25 of 79     19 of 111
+    zones precision / recall (e2e)     1.0 / 0.98   1.0 / 1.0    0.98 / 1.0
+    same tier (matched pairs)          43 / 43      80 / 82      110 / 112
+
+Joining cuts the zones that rely on an estimated attachment by about 40% with
+the same agreement with the hand labels. The joined run leaves 4 conductor
+pieces checked as surveyed only: pieces 22-30 m long with no tower in either
+tile, so there is nothing to hang a hot or wind curve from; the nearest
+vegetation is 7.8 m and 12.4 m from them.
+
+
+===============================================================================
+11. FINDING TILES WORTH DOWNLOADING (REMOTE SCREENING)
+===============================================================================
+
+The first two tiles had no trees near the line, so Phase 3 could not be
+checked on real encroachments. Downloading every 2 GB tile to look would be
+slow, so sample.py reads the LAS header and then about 2% of the points as
+2,000 evenly spaced chunks, by HTTP byte range (Hugging Face honours Range
+requests): about 40 MB and 2.5-6 minutes per zone instead of gigabytes.
+screen_zones.py then measures how close hand-labelled vegetation comes to
+hand-labelled wire.
+
+  - Chunk count matters more than sample size, because points are not stored
+    in a spatially uniform order: 300 chunks put t5b6's closest vegetation at
+    19.7 m, 2,000-3,000 chunks at 8.9-9.2 m (full file: 8.4 m).
+  - 16 of the 27 labelled zones were screened. Closest vegetation to a wire
+    (sample): t1z6a 1.7 m, t1z6b 2.5 m, t1z8 3.0 m, t2z5 3.3 m, t4z1 3.7 m,
+    t1z5b 4.2 m, t6z2 and t6z3 5.3 m, others 8-52 m. The forest tiles and the
+    junction were chosen from this list.
+
+
+===============================================================================
+12. HOW THE RESULTS ARE SCORED
+===============================================================================
+
+12.1 Phase 1: per-class precision, recall and IoU (intersection over union)
+  against the hand labels, on every original point, plus a confusion matrix.
+
+12.2 Phase 2: the same Phase 2 is run on the hand-labelled wire (and
+  hand-labelled pylons). Each of our conductors is matched to that model and
+  compared: towers found, conductor counts, height difference along the curve
+  (median and maximum), vertical RMSE.
+
+12.3 Phase 3, end to end (the headline score)
+  The reference is a run built entirely from the hand labels: a conductor model
+  fitted to the hand-labelled wire, and the hand-labelled vegetation, with the
+  same rules and scenarios. Our run is compared with it:
+    - flagged points: by index (same voxels), precision and recall;
+    - zones: a predicted zone matches a reference zone if they share a point;
+      precision, recall, and whether matched pairs have the same tier;
+    - hazard trees: matched if within 2 m in plan.
+  This covers both classification and conductor modelling errors. It does not
+  test the sag and wind assumptions themselves (both runs share them).
+
+12.4 Phase 3, same model (in the reports)
+  Our conductor model with the hand-labelled vegetation. It isolates Phase 1's
+  vegetation errors but is blind to a wrong conductor model: on t2z5 before
+  the graph it showed 90% / 100% zones while end to end was 77% / 82%. That is
+  why the end-to-end score is the one reported.
+
+12.5 Held-out protocol
+  A held-out tile is run once, on frozen code (a fixed commit exported to a
+  separate folder), before the tile has been looked at, and the result is
+  recorded as it comes out, good or bad. After that the tile may be used to
+  find and fix problems, but it no longer counts as held out.
+
+
+===============================================================================
+13. RESULTS
+===============================================================================
+
+13.1 Held-out tests
+
+  t1z8, forest, 51 M points, frozen commit d651e4b (3 m placeholder threshold
+  of that version): PASSED.
+    wires recall / IoU 99.5% / 0.82; towers 2 of 2; conductors 15 of 15 within
+    0.1 cm of the hand-label model; 34 of 34 encroachment zones found, none
+    false, all in the same tier, clearance within 2 cm; flagged points 99.9% /
+    100%; hazard trees 98% / 96%.
+
+  t4z1, forest, 103 M points, frozen commit 29cff99: CRASHED.
+    Phase 1 ran (wire recall 97.5%, IoU 0.70); Phase 2 crashed on a diverging
+    fit, so there was no clearance result. Fixing the crash then exposed false
+    towers and a false violation from canopy labelled as wire; the fixes are in
+    sections 8.2, 8.5 and 8.8. The tile now matches the reference to 5 cm but
+    is no longer held out.
+
+13.2 Phase 1 (precision / recall / IoU)
+
+  t5c2 (tuning tile; overall accuracy 0.983, about 1 minute on a laptop)
+    ground      0.990 / 0.997 / 0.987
+    vegetation  0.420 / 0.738 / 0.365   (tiny class: 0.7% of points)
+    building    1.000 / 0.582 / 0.582
+    pylon       0.991 / 0.952 / 0.944
+    wire        0.965 / 0.982 / 0.948
+  t5b6 (thresholds unchanged)
+    ground      0.990 / 0.977 / 0.968
+    vegetation  0.632 / 0.781 / 0.537
+    building    0.000 / 0.000 / 0.000   (almost no buildings; rock above DTM)
+    pylon       0.939 / 0.918 / 0.867
+    wire        0.803 / 0.974 / 0.786   (towers wider than the 15 m radius)
+  t1z6a (forest)
+    ground      0.949 / 0.887 / 0.847
+    vegetation  0.880 / 0.950 / 0.842
+    building    0.619 / 0.453 / 0.354
+    pylon         -   / 0.000 / 0.000   (towers fused with canopy)
+    wire        0.689 / 0.992 / 0.685
+  t1z8 (forest, held out)
+    ground      0.957 / 0.876 / 0.843
+    vegetation  0.901 / 0.957 / 0.866
+    building    0.051 / 0.414 / 0.048
+    pylon       0.994 / 0.478 / 0.477
+    wire        0.825 / 0.995 / 0.822
+  t4z1 (forest, held out; overall accuracy 0.960)
+    ground      0.808 / 0.966 / 0.786
+    vegetation  0.992 / 0.963 / 0.956
+    building    0.698 / 0.125 / 0.119
+    pylon       0.948 / 0.379 / 0.372
+    wire        0.713 / 0.975 / 0.700
+  t2z5 (junction): wire recall 99%, IoU 0.81.
+
+13.3 Phase 2
+
+                      t5c2    t5b6    t1z6a   t1z8    t2z5    t4z1
+  towers found (true) 2 (2)   2 (2)   3 (3)   2 (2)   6 (6)   4 (4)
+  spans (full)        3 (1)   5 (1)   5 (2)   3 (1)   14 (5)  8 (3)
+  conductors (ref.)   21(21)  22(22)  20(21)  15(15)  48(46)  34(35)
+  matching ref.       21      22      20      15      48      34
+  vertical RMSE (cm)  2.8-5.0 3.0-6.3 2.7-4.0 2.3-3.0 2.3-4.4 3.0-6.6
+  height diff to ref,
+    median / max (cm) 0.0/1.7 0.5/2.6 0.0/0.2 0.0/0.1 0.1/52  0.0/18
+
+  - Classification errors barely move the geometry: even on t5b6, where 20%
+    of predicted wire points are wrong, every conductor is within 3.8 cm of
+    the one fitted to hand-labelled wire.
+  - The 52 cm on t2z5 is at the junction, where the hand-label model itself
+    misses some conductors.
+  - Synthetic check: c = 900 m and sag 2.35 m recovered within 3% and 5 cm.
+
+13.4 Phase 3 (Swiss rules, 380 kV), end to end
+
+                   t1z8       t1z6a      t2z5        t4z1       t5b6
+  closest veg.,
+   surveyed (ref)  2.80(2.80) 1.17(1.17) 1.21(1.21)  3.65(3.65) 8.39(8.39) m
+  zones ours(ref)  63 (63)    43 (44)    75 (76)     62 (64)    1 (1)
+  zones P / R      100/100%   100/98%    99/100%     100/97%    100/100%
+  same tier        63 of 63   43 of 43   74 of 77    62 of 62   1 of 1
+  flagged points
+   P / R           99.9/100%  97/97%     97/97%      99.9/99.6% 100/100%
+  hazard trees
+   P / R           97/97%     88/97%     89/96%      91/92%     none exist
+  wire not
+   modelled        none       12 m       235 m       123 m      none
+
+  Closest clearance by scenario (surveyed / hot / ice / wind):
+    t1z8   2.80 / 2.58 / 2.68 / 0.22 m   (reference 2.80 / 2.58 / 2.68 / 0.23)
+    t1z6a  1.17 / 0.82 / 0.98 / 0.45 m   (reference 1.17 / 0.82 / 0.98 / 0.44)
+    t2z5   1.21 / 1.18 / 1.23 / 0.78 m   (reference 1.21 / 1.99 / 2.01 / 2.00)
+    t4z1   3.65 / 3.40 / 3.47 / 0.00 m   (reference 3.65 / 3.40 / 3.47 / 0.01)
+    t5b6   8.39 / 7.66 / 8.00 / 10.30 m
+    t5c2   9.24 / 8.56 / 8.94 / 9.82 m   (no zones)
+
+  Observations:
+  - The hot case governs most zones; the wind case matters where trees stand
+    beside the line (t1z8: a 44 degree swing brings a conductor to 0.22 m of a
+    crown; on t4z1, 25 of 62 zones are governed by wind).
+  - On t2z5 the reference's larger hot and wind clearances come from junction
+    conductors it fails to model, which we model from hand-labelled wire.
+  - t2z5's remaining 235 m of unmodelled wire (a straight cable through a
+    tower-less span, rejected with c at the fit bound, and a 20 m piece) has no
+    vegetation within the watch distance.
+  - t4z1's 123 m of unmodelled wire is mostly the patch of canopy Phase 1
+    called wire (no wire in the hand labels): reported as not assessed, a
+    cautious false alarm, where before the fixes it was a false violation.
+  - Hazard-tree precision is lowest on the forest tiles. On t1z6a the 10 extra
+    trees all come from Phase 1's vegetation: 2 are the same trees with
+    treetops 2.5-3.3 m apart (beyond the 2 m match), 6 sit right on the 3.8 m
+    line (margin 3.5-3.8 m against the reference's 3.8-4.3 m, from a slightly
+    different base and therefore lean), 2 are crowns of points the hand labels
+    leave unlabelled.
+
+13.5 Sensitivity to the survey temperature (unknown, assumed 15 C), t1z8
+    survey at 5 / 15 / 25 C:
+    closest hot clearance  2.47 / 2.58 / 2.66 m
+    closest wind clearance 0.14 / 0.22 / 0.37 m
+    violations             17 / 16 / 14
+  A colder assumption is the safe side.
+
+
+===============================================================================
+14. HOW THE PROJECT DEVELOPED: PROBLEMS FOUND AND HOW EACH WAS FIXED
+===============================================================================
+
+Each phase was built, run on real labelled data, and the failures traced to
+their cause. In order:
+
+  Phase 1
+  - Truth labels were being read as raw GridNet ids rather than grouped
+    classes: fixed the mapping.
+  - Steep mountain spans failed the wire rules: the direction limit was relaxed
+    (dir_z 0.6) and gap_below changed to use vertical runs, so a wire's own
+    neighbours no longer close its air gap.
+  - Tower steel absorbed into wires stopped towers being found: pylon detection
+    now uses the "strict" wires (before region growing).
+
+  Phase 2
+  - Tower hardware spoiled the fits: 3 m tower margin, residual trim and the
+    validation rules.
+  - Forest towers fused with the canopy (0 towers found on t1z6a): a per-point
+    scattering filter was tried and rejected (it broke the alpine towers);
+    towers are now found from wire kinks plus the centre-column test.
+  - Two conductors bridged into one (2.65 m RMSE): re-split on RMSE failure.
+  - Wires stopping short of a tower were modelled through the trees: model only
+    where the data reaches.
+  - Moving towers onto "steel" pulled forest towers 8-9 m off: removed.
+  - The single-route model failed at the t2z5 junction: rebuilt as a graph.
+  - A bypass edge passing a tower at 12.07 m: triangle rule added.
+  - A false angle tower where two lines cross: crossing rejection.
+  - False terminals (short rays, then trees at wire height): minimum ray 30 m,
+    25 m separation from known towers, then the steel-shape test.
+  - A false tower from a one-sided kink at a tile edge: 80% coverage rule.
+  - Merge distance too large merged junction towers: 8 m.
+  - A 13 m piece of jumper and vegetation 0.69 m from a tree: the "short piece
+    detached from its tower" rule.
+  - A missed 15 m junction span: angle tolerance atan(20 m / L).
+  - t2z5's 896 m of unmodelled wire: merged and diverging conductors; the
+    dropped-points refit and the RANSAC sideways split (896 -> 235 m).
+  - t4z1 (held out) crashed on a diverging fit: fit returns NaN, rejected.
+  - t4z1 false towers in canopy labelled wire: tower confirmation.
+  - t4z1 false violation from canopy scraps: full point count for tower-less
+    pieces.
+
+  Phase 3
+  - False zones from tower steel labelled vegetation: 8 m tower exclusion.
+  - False zones from conductor points labelled vegetation: floating-fragment
+    and on-conductor cleaning (keeping real contact points).
+  - Short pieces extrapolated across whole spans swung into trees in wind: the
+    attachment rule (exact / estimated / not assessed).
+  - Placeholder 3 m thresholds replaced with the Swiss LeV rules, and a simple
+    sag scaling replaced with the change-of-state equation, the ice case and
+    the wind case.
+  - Vegetation beside unmodelled wire silently counted as clear: the
+    unmodelled-wire report.
+  - Hazard trees as vertical sticks: crown radius and lean (base) added.
+  - Spans cut by tile edges: tile joining.
+
+  Process
+  - Remote screening was needed to find tiles with trees near the line; 300
+    sampled chunks were too few, 2,000 were enough.
+  - Large downloads dropped mid-way: resumed with curl -C - and a size check.
+
+
+===============================================================================
+15. ASSUMPTIONS AND LIMITATIONS
+===============================================================================
+
+  Rules and inputs
+  - The voltage (380 kV), conductor type, survey temperature (15 C) and maximum
+    operating temperature (40 C) are assumed, not read from the line's records.
+    All are parameters.
+  - Growth (1 m/year) and the trimming cycle (3 years), which define the
+    monitor tier, are assumptions.
+  - Art. 35 sets a vertical distance; it is applied as a 3D distance.
+  - The wind-case tree distance (3.8 m) is by analogy with Art. 34(2), since
+    Art. 35(1) leaves it case by case.
+
+  Physics
+  - Sag-tension is parabolic, per actual span: no ruling span (in reality
+    suspension insulators let tension equalise between spans), no creep, no
+    insulator swing.
+  - One survey temperature for the whole flight.
+  - Bundled conductors would be modelled at the bundle centre (these lines
+    show single conductors).
+
+  Geometry and coverage
+  - Partial spans: the model is valid only over the stretch with points; c is
+    weakly determined; far attachments are estimated (joining tiles helps).
+  - A terminal tower within 25-30 m of the previous tower is not found.
+  - Several parallel lines sharing towers are not told apart.
+  - A tree within 8 m of a tower centre is not reported (tower exclusion).
+  - Hazard trees: the fall direction of a leaning tree is not modelled; reach
+    is a sphere.
+
+  Classification
+  - Buildings are poorly classified (no effect on clearance).
+  - Forest towers are often missed by Phase 1 (Phase 2 compensates).
+  - Canopy can be called wire; Phase 2 rejects it, but it then appears as
+    "unmodelled wire, not assessed" (a cautious false alarm).
+
+  Validation
+  - The end-to-end reference is this project's own Phase 2 on hand-labelled
+    points; at junctions it is itself imperfect.
+  - Only two tiles were truly held out (t1z8 passed, t4z1 crashed). The other
+    numbers come from tiles used during development.
+  - All data is from Swiss lines of one dataset; other sensors, densities and
+    line types are untested.
+
+
+===============================================================================
+16. ENGINEERING: TESTS, CI, PACKAGING, COMMANDS, OUTPUTS
+===============================================================================
+
+16.1 Tests (pytest, 43 tests, about 15-50 s; no real data needed)
+  test_phase1     wires, pylons, ground and vegetation on the synthetic
+                  corridor; gap_below ignores points in the same run; label
+                  mapping.
+  test_phase2     towers and spans; four conductors per span; c and sag
+                  recovered; steep partial span fit; non-finite fit rejected;
+                  no towers gives one span; split pylon fragments merge;
+                  diverging fit returns NaN; parallel phase bridged into one
+                  cluster is split; diverging wire merged into one conductor is
+                  split; tower-less scrap needs the full point count.
+  test_forest     towers found from wires when pylons are labelled vegetation;
+                  no false towers on a clean span; bridged conductors split.
+  test_junction   the junction graph (towers, spans), with and without forest
+                  around the towers; no terminal tower at a tile edge.
+  test_extent     a wire stopping short of a tower is not modelled to it; full
+                  when it reaches both; short pieces get no sag/wind; long
+                  one-tower pieces are estimated.
+  test_phase3     through-points round trip; stiff conductor reduces to thermal
+                  elongation; elastic relief reduces the hot sag; ice load sags
+                  the wire (hand-calculated); state change round trip; blowout
+                  swings by the wind angle; a tree under the line is a
+                  violation and far trees are clear; wire fragments dropped but
+                  contact points kept; hazard reach; treetops found.
+  test_hazard     crown radius of a synthetic tree; a leaning tree's base;
+                  the crown extends the reach.
+  test_unmodelled unmodelled wire reported with its vegetation.
+  test_join       joined tiles give full spans.
+  test_sample     remote sampling reads the right points.
+  test_validate3  scoring counts hits, misses and false alarms.
+
+  The splitting tests were checked to fail without the fix and pass with it.
+
+16.2 Quality and CI
+  ruff (lint and format, line length 100) and pytest run on every push and
+  pull request in GitHub Actions (.github/workflows/ci.yml); a badge in the
+  README shows the status.
+
+16.3 Installation
+  uv venv --python 3.12 .venv
+  uv pip install --python .venv -r requirements.txt -e .
+
+16.4 Commands (installed by pyproject.toml; also python -m scripts.<name>)
+  clearance-phase1 <tile.las> [more tiles]     Phase 1
+  clearance-phase2 <name>_classified_voxels.las Phase 2
+  clearance-phase3 <name>_classified_voxels.las Phase 3
+       options: --kv 380 --mvcd <m> --t-survey 15 --t-max 40 --wind-pa 500
+  clearance-batch a.las b.las c.las+d.las --truth-field ground_truth
+       --truth-map gridnet [phase 3 options]   all phases, summary table
+  clearance-screen --remote <zone> ...          remote screening
+
+16.5 Outputs per tile (out/<name>/)
+  Phase 1: classified cloud (LAS, full and voxels), report (.md/.json) with
+           scores and confusion matrix, plan / profile / 3D plots.
+  Phase 2: phase2.json, conductors.csv, conductor_model.las, span and plan
+           plots.
+  Phase 3: phase3.json, encroachments.csv and .geojson, hazard_trees.csv,
+           unmodelled_wire.csv, vegetation_clearance.las, profile / plan /
+           section plots.
+  Batch:   out/batch_summary.csv and .md.
+
+16.6 Runtime
+  Phase 1 on t5c2 (30.6 M points) takes about a minute on a laptop; on t4z1
+  (102.8 M points, 28.5 M voxels) about 9 minutes, mostly feature computation.
+  Phases 2-3 take minutes per tile (longer with scoring, which runs the
+  reference model too).
+
+
+===============================================================================
+17. THE PROJECT PAGE
+===============================================================================
+
+https://lidar-clearance.vercel.app is a single static page (site/index.html
+plus figures), deployed on Vercel. It presents the question, a drawing of a span
+with its surveyed, hot and wind positions and a tree inside the 5.3 m
+clearance, the three phases with real plots, the Swiss rules, the end-to-end
+results table, both held-out tests as they came out, and how to run it. Its
+visual style (dark hero, grid paper, Space Grotesk and DM Sans, green and
+orange accents) follows the look of the TreeSwift website, without using its
+logo, photos or text. It is not connected to the repository: after editing it,
+redeploy with "npx vercel@48.2.0 deploy --prod" from site/.
+
+
+===============================================================================
+18. GLOSSARY
+===============================================================================
+
+  AAAC          All-aluminium-alloy conductor (here AlMgSi, "Aldrey").
+  ASPRS codes   Standard LAS classification numbers (2 ground, 5 high
+                vegetation, 6 building, 14 wire-conductor, 15 transmission
+                tower).
+  Attachment    Where a conductor is held at a tower (insulator clamp).
+  Blowout       Sideways swing of a conductor in wind.
+  c             Catenary parameter, H / w, in metres; larger = tighter.
+  Catenary      The curve a hanging flexible cable takes under its own weight.
+  Change-of-state equation  Relates a conductor's tension at one temperature
+                and load to another, accounting for elastic stretch and
+                thermal growth.
+  Conductor     One wire carrying current (a phase), or an earth wire.
+  DBSCAN        Density-based clustering: groups points that are within eps
+                of enough neighbours.
+  DTM           Digital terrain model: the bare-ground surface.
+  Eigenvalue features  Shape descriptors from the covariance of a point's
+                neighbours (linear, planar, scattered).
+  Encroachment zone  A connected group of vegetation points too close to a
+                conductor in some scenario.
+  End to end    Scored against a reference built entirely from hand labels.
+  Full span     A span between two found towers (else partial).
+  HAG           Height above ground.
+  Hazard tree   A tree that could reach a conductor if it fell.
+  Held out      A tile run once on frozen code before being looked at.
+  IoU           Intersection over union: overlap of predicted and true sets.
+  LAS           The standard file format for LiDAR point clouds.
+  LeV           Leitungsverordnung, the Swiss ordinance on electrical lines
+                (SR 734.31).
+  LiDAR         Laser scanning; measures 3D points by timing laser pulses.
+  Margin        Clearance minus required distance; negative = violation.
+  MVCD          Minimum vegetation clearance distance (the required distance).
+  PMF           Progressive morphological filter (ground filtering).
+  RANSAC        Random sample consensus: fits a model to the largest subset of
+                points that agrees with it, ignoring the rest.
+  RMSE          Root mean square error of a fit.
+  Sag           Vertical distance between the chord (straight line between
+                attachments) and the conductor.
+  Span          The stretch of line between two towers.
+  Tier          Violation / urgent / monitor / clear.
+  Voxel         A small cube; voxel downsampling keeps one point per cube.
+
+
+===============================================================================
+19. POSSIBLE NEXT STEPS
+===============================================================================
+
+  - A third held-out tile on the current code, for a clean estimate of the
+    finished version.
+  - Line metadata (voltage, conductor type, rated temperature) from the
+    operator instead of assumptions; a ruling-span model for suspension spans.
+  - Survey temperature from weather records at the flight time.
+  - Fall direction of leaning trees (lean direction, slope, wind).
+  - A dedicated check of vegetation inside tower footprints (currently
+    excluded).
+  - Telling apart parallel lines that share towers.
+  - Testing on other sensors and datasets (airborne, mobile, other countries'
+    rules as alternative rule sets).
+  - Connecting the project page to the repository for automatic deploys.
+
+===============================================================================
